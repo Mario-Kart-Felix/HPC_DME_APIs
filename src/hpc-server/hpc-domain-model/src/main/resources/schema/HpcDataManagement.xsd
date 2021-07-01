@@ -49,7 +49,9 @@
 			<xsd:element name="tieringProtocol" type="xsd:string" />
 			<xsd:element name="encryptionKey" type="xsd:string" />
 			<xsd:element name="encryptionAlgorithm" type="xsd:string" />
+			<xsd:element name="storageClass" type="xsd:string" />
 			<xsd:element name="encryptedTransfer" type="xsd:boolean" minOccurs="0" />
+			<xsd:element name="hyperfileArchive" type="xsd:boolean" minOccurs="0" />
 		</xsd:sequence>
 	</xsd:complexType>
 
@@ -217,6 +219,7 @@
 			<xsd:element name="sourcePermissions"
 				type="hpc-domain-datamanagement:HpcPathPermissions" />
 			<xsd:element name="sudoPassword" type="xsd:string" />
+			<xsd:element name="systemAccountName" type="xsd:string" />
 		</xsd:sequence>
 	</xsd:complexType>
 

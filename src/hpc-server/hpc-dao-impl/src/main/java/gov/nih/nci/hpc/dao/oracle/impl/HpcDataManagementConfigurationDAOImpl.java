@@ -78,6 +78,7 @@ public class HpcDataManagementConfigurationDAOImpl implements HpcDataManagementC
 		HpcDataTransferConfiguration globusConfiguration = new HpcDataTransferConfiguration();
 		globusConfiguration.setUrlOrRegion(rs.getString("GLOBUS_URL"));
 		globusConfiguration.setEncryptedTransfer(rs.getBoolean("GLOBUS_ENCRYPTED_TRANSFER"));
+		globusConfiguration.setHyperfileArchive(rs.getBoolean("GLOBUS_HYPERFILE_ARCHIVE"));
 
 		HpcArchive globusBaseArchiveDestination = new HpcArchive();
 		HpcFileLocation globusArchiveLocation = new HpcFileLocation();
@@ -132,11 +133,12 @@ public class HpcDataManagementConfigurationDAOImpl implements HpcDataManagementC
 		s3Configuration.setTieringProtocol(rs.getString("TIERING_PROTOCOL"));
 		s3Configuration.setEncryptionAlgorithm(rs.getString("ENCRYPTION_ALGORITHM"));
 		s3Configuration.setEncryptionKey(rs.getString("ENCRYPTION_KEY"));
+		s3Configuration.setStorageClass(rs.getString("STORAGE_CLASS"));
 
 		return s3Configuration;
 	};
 
-	// HpcDataTransferConfiguration Table (HPC_S3_ARCHIVE_CONFIGURATION) to Object
+	// HpcDistinguishedNameSearch Table (HPC_DISTINGUISHED_NAME_SEARCH) to Object
 	// mapper.
 	private RowMapper<HpcDistinguishedNameSearch> distinguishedNameSearchRowMapper = (rs, rowNum) -> {
 		// Map the S3 Configuration.

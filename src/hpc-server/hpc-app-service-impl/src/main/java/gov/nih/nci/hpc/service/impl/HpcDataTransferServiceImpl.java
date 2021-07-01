@@ -375,8 +375,10 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		uploadRequest.setFileSystemUploadSource(fileSystemUploadSource);
 		if (sourceFile != null) {
 			uploadRequest.setSourceFile(sourceFile);
-			uploadRequest
-					.setSudoPassword(systemAccountLocator.getSystemAccount(HpcIntegratedSystem.IRODS).getPassword());
+
+			HpcIntegratedSystemAccount systemAccount = systemAccountLocator.getSystemAccount(HpcIntegratedSystem.IRODS);
+			uploadRequest.setSystemAccountName(systemAccount.getUsername());
+			uploadRequest.setSudoPassword(systemAccount.getPassword());
 		}
 		uploadRequest.setUploadRequestURLChecksum(uploadRequestURLChecksum);
 		uploadRequest.setGenerateUploadRequestURL(generateUploadRequestURL);
@@ -456,7 +458,7 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 
 		// There are 5 methods of downloading data object:
 		// 1. Data is in deep archive, restoration is required. Supported by
-		// S3(Cloudian)
+		// S3 (Cloudian)
 		// archive.
 		// 2. Synchronous download via REST API. Supported by S3 & POSIX
 		// archives.
@@ -491,22 +493,23 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 			performSynchronousDownload(downloadRequest, response, dataTransferConfiguration, synchronousDownloadFilter);
 
 		} else if (dataTransferType.equals(HpcDataTransferType.GLOBUS) && globusDownloadDestination != null) {
-			// This is an asynchronous download request from a file system archive to a
+			// This is an asynchronous download request from a POSIX archive to a
 			// Globus destination.
 			// Note: this can also be a 2nd hop download from temporary file-system archive
 			// to a Globus destination (after the 1st hop completed).
-			performGlobusAsynchronousDownload(downloadRequest, response);
+			performGlobusAsynchronousDownload(downloadRequest, response, dataTransferConfiguration);
 
 		} else if (dataTransferType.equals(HpcDataTransferType.S_3) && globusDownloadDestination != null) {
 			// This is an asynchronous download request from a S3 archive to a
 			// Globus destination. It is performed in 2-hops.
 			perform2HopDownload(downloadRequest, response, dataTransferConfiguration);
 
-		} else if (dataTransferType.equals(HpcDataTransferType.S_3) && s3DownloadDestination != null) {
-			// This is an asynchronous download request from a S3 archive to a user provided
+		} else if (s3DownloadDestination != null) {
+			// This is an asynchronous download request from a S3 / POSIX archive to a user
+			// provided
 			// S3 destination.
 			// Note: The user S3 destination can be either AWS or 3rd Party S3 provider.
-			performS3AsynchronousDownload(downloadRequest, response, dataTransferConfiguration);
+			performS3AsynchronousDownload(downloadRequest, dataTransferType, response, dataTransferConfiguration);
 
 		} else if (dataTransferType.equals(HpcDataTransferType.S_3) && googleDriveDownloadDestination != null) {
 			// This is an asynchronous download request from a S3 archive to a
@@ -559,15 +562,18 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		// Check that the data transfer system can accept transfer requests.
 		boolean globusSyncUpload = dataTransferType.equals(HpcDataTransferType.GLOBUS) && fileLocation != null;
 
+		// Get the data transfer configuration.
+		HpcDataTransferConfiguration dataTransferConfiguration = dataManagementConfigurationLocator
+				.getDataTransferConfiguration(configurationId, s3ArchiveConfigurationId, dataTransferType);
+
+		// Set the metadata of the data-object in the archive
 		String checksum = dataTransferProxies.get(dataTransferType).setDataObjectMetadata(
 				!globusSyncUpload ? getAuthenticatedToken(dataTransferType, configurationId, s3ArchiveConfigurationId)
 						: null,
-				fileLocation,
-				dataManagementConfigurationLocator
-						.getDataTransferConfiguration(configurationId, s3ArchiveConfigurationId, dataTransferType)
-						.getBaseArchiveDestination(),
+				fileLocation, dataTransferConfiguration.getBaseArchiveDestination(),
 				generateMetadata(configurationId, objectId, registrarId),
-				systemAccountLocator.getSystemAccount(HpcIntegratedSystem.IRODS).getPassword());
+				systemAccountLocator.getSystemAccount(HpcIntegratedSystem.IRODS).getPassword(),
+				dataTransferConfiguration.getStorageClass());
 
 		HpcArchiveObjectMetadata objectMetadata = new HpcArchiveObjectMetadata();
 		objectMetadata.setChecksum(checksum);
@@ -589,11 +595,12 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 			throw new HpcException("Invalid file location", HpcErrorType.INVALID_REQUEST_INPUT);
 		}
 
-		dataTransferProxies.get(dataTransferType).deleteDataObject(
-				getAuthenticatedToken(dataTransferType, configurationId, s3ArchiveConfigurationId), fileLocation,
-				dataManagementConfigurationLocator
-						.getDataTransferConfiguration(configurationId, s3ArchiveConfigurationId, dataTransferType)
-						.getBaseArchiveDestination());
+		dataTransferProxies.get(dataTransferType)
+				.deleteDataObject(getAuthenticatedToken(dataTransferType, configurationId, s3ArchiveConfigurationId),
+						fileLocation,
+						dataManagementConfigurationLocator.getDataTransferConfiguration(configurationId,
+								s3ArchiveConfigurationId, dataTransferType).getBaseArchiveDestination(),
+						systemAccountLocator.getSystemAccount(HpcIntegratedSystem.IRODS).getPassword());
 	}
 
 	@Override
@@ -1018,10 +1025,37 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		downloadRequest.setS3Destination(downloadTask.getS3DownloadDestination());
 		downloadRequest.setGoogleDriveDestination(downloadTask.getGoogleDriveDownloadDestination());
 
-		// Get the data transfer configuration.
-		HpcDataTransferConfiguration dataTransferConfiguration = dataManagementConfigurationLocator
-				.getDataTransferConfiguration(downloadRequest.getConfigurationId(),
-						downloadRequest.getS3ArchiveConfigurationId(), downloadRequest.getDataTransferType());
+		HpcArchive baseArchiveDestination = null;
+		Boolean encryptedTransfer = null;
+		Object authenticatedToken = null;
+
+		// If this is a download from a POSIX archive to S3 destination, we need to
+		// re-generate the
+		// URL to the POSIX archive.
+		if (downloadTask.getDestinationType().equals(HpcDataTransferType.S_3)
+				&& StringUtils.isEmpty(downloadTask.getS3ArchiveConfigurationId())) {
+			downloadRequest.setArchiveLocationURL(generateDownloadRequestURL(downloadRequest.getPath(),
+					downloadRequest.getArchiveLocation(), HpcDataTransferType.GLOBUS,
+					downloadRequest.getConfigurationId(), downloadRequest.getS3ArchiveConfigurationId()));
+		} else {
+			// For any other download - get the data transfer configuration.
+			HpcDataTransferConfiguration dataTransferConfiguration = dataManagementConfigurationLocator
+					.getDataTransferConfiguration(downloadRequest.getConfigurationId(),
+							downloadRequest.getS3ArchiveConfigurationId(), downloadRequest.getDataTransferType());
+			baseArchiveDestination = dataTransferConfiguration.getBaseArchiveDestination();
+			encryptedTransfer = dataTransferConfiguration.getEncryptedTransfer();
+
+			// If the destination is Google Drive, we need to generate a download URL from
+			// the S3 archive.
+			if (downloadTask.getDestinationType().equals(HpcDataTransferType.GOOGLE_DRIVE)) {
+				downloadRequest.setArchiveLocationURL(generateDownloadRequestURL(downloadRequest.getPath(),
+						downloadRequest.getArchiveLocation(), HpcDataTransferType.S_3,
+						downloadRequest.getConfigurationId(), downloadRequest.getS3ArchiveConfigurationId()));
+			} else {
+				authenticatedToken = getAuthenticatedToken(downloadRequest.getDataTransferType(),
+						downloadRequest.getConfigurationId(), downloadRequest.getS3ArchiveConfigurationId());
+			}
+		}
 
 		// If the destination is Globus and the data transfer is S3, then we need to
 		// restart a 2-hop download.
@@ -1047,32 +1081,19 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 			downloadRequest.setFileDestination(secondHopDownload.getSourceFile());
 		}
 
-		// If the destination is AWS S3 or Google Drive, we need to restart the
-		// download.
+		// If the destination is S3 (AWS or 3rd Party), or Google Drive, we need to
+		// create a progress listener.
 		if (downloadTask.getDestinationType().equals(HpcDataTransferType.S_3)
 				|| downloadTask.getDestinationType().equals(HpcDataTransferType.GOOGLE_DRIVE)) {
 			// Create a listener that will complete the download task when it is done.
 			progressListener = new HpcStreamingDownload(downloadTask, dataDownloadDAO, eventService, this);
 		}
 
-		// If the destination is Google Drive, we need to generate a download URL from
-		// the archive.
-		if (downloadTask.getDestinationType().equals(HpcDataTransferType.GOOGLE_DRIVE)) {
-			downloadRequest.setArchiveLocationURL(generateDownloadRequestURL(downloadRequest.getPath(),
-					downloadRequest.getArchiveLocation(), HpcDataTransferType.S_3, downloadRequest.getConfigurationId(),
-					downloadRequest.getS3ArchiveConfigurationId()));
-		}
-
-		// Submit a transfer request.
+		// Submit a data object download request.
 		try {
-			downloadTask.setDataTransferRequestId(
-					dataTransferProxies.get(downloadRequest.getDataTransferType()).downloadDataObject(
-							downloadRequest.getDataTransferType().equals(HpcDataTransferType.GOOGLE_DRIVE) ? null
-									: getAuthenticatedToken(downloadRequest.getDataTransferType(),
-											downloadRequest.getConfigurationId(),
-											downloadRequest.getS3ArchiveConfigurationId()),
-							downloadRequest, dataTransferConfiguration.getBaseArchiveDestination(), progressListener,
-							dataTransferConfiguration.getEncryptedTransfer()));
+			downloadTask.setDataTransferRequestId(dataTransferProxies.get(downloadRequest.getDataTransferType())
+					.downloadDataObject(authenticatedToken, downloadRequest, baseArchiveDestination, progressListener,
+							encryptedTransfer));
 
 		} catch (HpcException e) {
 			// Failed to submit a transfer request. Cleanup the download task.
@@ -1094,6 +1115,49 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		logger.info("download task: {} - continued  - archive file-id = {} [transfer-type={}, destination-type={}]",
 				downloadTask.getId(), downloadRequest.getArchiveLocation().getFileId(),
 				downloadTask.getDataTransferType(), downloadTask.getDestinationType());
+	}
+
+	@Override
+	public void stageHyperfileDataObjectDownloadTask(HpcDataObjectDownloadTask downloadTask) throws HpcException {
+
+		HpcFileLocation secondHopArchiveLocation = getSecondHopDownloadSourceLocation(downloadTask.getConfigurationId(),
+				downloadTask.getS3ArchiveConfigurationId(), downloadTask.getDataTransferType());
+
+		// Get the data transfer configuration.
+		HpcDataTransferConfiguration dataTransferConfiguration = dataManagementConfigurationLocator
+				.getDataTransferConfiguration(downloadTask.getConfigurationId(),
+						downloadTask.getS3ArchiveConfigurationId(), downloadTask.getDataTransferType());
+
+		// Create a download request from Hyperfile to the DME Globus endpoint.
+		HpcDataObjectDownloadRequest downloadRequest = new HpcDataObjectDownloadRequest();
+		downloadRequest.setArchiveLocation(downloadTask.getArchiveLocation());
+		downloadRequest.setCompletionEvent(downloadTask.getCompletionEvent());
+		downloadRequest.setDataTransferType(downloadTask.getDataTransferType());
+		downloadRequest.setConfigurationId(downloadTask.getConfigurationId());
+		downloadRequest.setS3ArchiveConfigurationId(downloadTask.getS3ArchiveConfigurationId());
+		downloadRequest.setPath(downloadTask.getPath());
+		downloadRequest.setUserId(downloadTask.getUserId());
+		downloadRequest.setFileDestination(createFile(
+				getFilePath(secondHopArchiveLocation.getFileId(), dataTransferConfiguration.getBaseDownloadSource())));
+		downloadRequest.setSize(downloadTask.getSize());
+		downloadRequest.setSudoPassword(systemAccountLocator.getSystemAccount(HpcIntegratedSystem.IRODS).getPassword());
+
+		// Stage the file in DME Globus endpoint.
+		dataTransferProxies.get(downloadTask.getDataTransferType()).downloadDataObject(
+				getAuthenticatedToken(downloadTask.getDataTransferType(), downloadRequest.getConfigurationId(),
+						downloadRequest.getS3ArchiveConfigurationId()),
+				downloadRequest, dataTransferConfiguration.getBaseArchiveDestination(), null,
+				dataTransferConfiguration.getEncryptedTransfer());
+
+		// Reset the download task, so it continues to download from DME Globus endpoint
+		// to the user's Globus endpoint.
+		downloadTask.setArchiveLocation(secondHopArchiveLocation);
+		downloadTask.setDataTransferStatus(HpcDataTransferDownloadStatus.RECEIVED);
+		downloadTask.setDownloadFilePath(downloadRequest.getFileDestination().getAbsolutePath());
+		downloadTask.setInProcess(false);
+
+		// Persist the task.
+		dataDownloadDAO.upsertDataObjectDownloadTask(downloadTask);
 	}
 
 	@Override
@@ -1414,8 +1478,9 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		}
 
 		return dataTransferProxies.get(dataTransferType)
-				.getFileContainerName(dataTransferType.equals(HpcDataTransferType.GOOGLE_DRIVE) ? null
-						: getAuthenticatedToken(dataTransferType, configurationId, null), fileContainerId);
+				.getFileContainerName(dataTransferType.equals(HpcDataTransferType.GLOBUS)
+						? getAuthenticatedToken(dataTransferType, configurationId, null)
+						: null, fileContainerId);
 	}
 
 	/**
@@ -1553,7 +1618,13 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 
 		// Set Owner, Group and Permissions on the archive path.
 		String sudoPassword = systemAccountLocator.getSystemAccount(HpcIntegratedSystem.IRODS).getPassword();
-		exec("chown " + permissions.getOwner() + " " + archivePath, sudoPassword);
+
+		// TODO: We no longer set the owner permissions, but keep the DME system account
+		// to own the file.
+		// With this change the 'sudo enabled exec() is no longer needed. This is a
+		// temporary fix until code cleanup
+		// exec("chown " + permissions.getOwner() + " " + archivePath, sudoPassword);
+
 		exec("chown :" + permissions.getGroup() + " " + archivePath, sudoPassword);
 		exec("chmod " + permissions.getPermissionsMode() + " " + archivePath, sudoPassword);
 	}
@@ -1780,7 +1851,7 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 				uploadRequest, dataTransferConfiguration.getBaseArchiveDestination(),
 				dataTransferConfiguration.getUploadRequestURLExpiration(), progressListener,
 				generateMetadata(configurationId, uploadRequest.getDataObjectId(), uploadRequest.getUserId()),
-				dataTransferConfiguration.getEncryptedTransfer());
+				dataTransferConfiguration.getEncryptedTransfer(), dataTransferConfiguration.getStorageClass());
 	}
 
 	/**
@@ -1942,6 +2013,20 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 			HpcDomainValidationResult validationResult = isValidS3Account(s3DownloadDestination.getAccount());
 			if (!validationResult.getValid()) {
 				throw new HpcException("Invalid S3 account: " + validationResult.getMessage(),
+						HpcErrorType.INVALID_REQUEST_INPUT);
+			}
+
+			HpcDataTransferProxy dataTransferProxy = dataTransferProxies.get(HpcDataTransferType.S_3);
+			boolean s3BucketAccessible = true;
+			try {
+				s3BucketAccessible = dataTransferProxy.getPathAttributes(dataTransferProxy.authenticate(
+						s3DownloadDestination.getAccount()), s3DownloadDestination.getDestinationLocation(), false).getIsAccessible();
+			} catch (HpcException e) {
+				throw new HpcException("Failed to locate AWS S3 bucket: " + s3DownloadDestination.getDestinationLocation().getFileContainerId(),
+						HpcErrorType.INVALID_REQUEST_INPUT, e);
+			}
+			if(!s3BucketAccessible) {
+				throw new HpcException("Failed to access AWS S3 bucket: " + s3DownloadDestination.getDestinationLocation().getFileContainerId(),
 						HpcErrorType.INVALID_REQUEST_INPUT);
 			}
 		}
@@ -2232,6 +2317,9 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		// Create a task ID for this download request.
 		response.setDownloadTaskId(UUID.randomUUID().toString());
 
+		// Set sudo Password (This is needed in the case of POSIX sync download).
+		downloadRequest.setSudoPassword(systemAccountLocator.getSystemAccount(HpcIntegratedSystem.IRODS).getPassword());
+
 		// Perform the synchronous download.
 		dataTransferProxies.get(downloadRequest.getDataTransferType()).downloadDataObject(
 				getAuthenticatedToken(downloadRequest.getDataTransferType(), downloadRequest.getConfigurationId(),
@@ -2295,14 +2383,16 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 	/**
 	 * Perform a globus asynchronous download. This method submits a download task.
 	 *
-	 * @param downloadRequest The data object download request.
-	 * @param response        The download response object. This method sets
-	 *                        download task id and destination location on the
-	 *                        response.
+	 * @param downloadRequest           The data object download request.
+	 * @param response                  The download response object. This method
+	 *                                  sets download task id and destination
+	 *                                  location on the response.
+	 * @param dataTransferConfiguration The data transfer configuration.
 	 * @throws HpcException on service failure.
 	 */
 	private void performGlobusAsynchronousDownload(HpcDataObjectDownloadRequest downloadRequest,
-			HpcDataObjectDownloadResponse response) throws HpcException {
+			HpcDataObjectDownloadResponse response, HpcDataTransferConfiguration dataTransferConfiguration)
+			throws HpcException {
 		// Create a download task.
 		HpcDataObjectDownloadTask downloadTask = new HpcDataObjectDownloadTask();
 		downloadTask.setArchiveLocation(downloadRequest.getArchiveLocation());
@@ -2310,7 +2400,10 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		downloadTask.setConfigurationId(downloadRequest.getConfigurationId());
 		downloadTask.setS3ArchiveConfigurationId(downloadRequest.getS3ArchiveConfigurationId());
 		downloadTask.setCreated(Calendar.getInstance());
-		downloadTask.setDataTransferStatus(HpcDataTransferDownloadStatus.RECEIVED);
+		downloadTask.setDataTransferStatus(
+				Optional.ofNullable(dataTransferConfiguration.getHyperfileArchive()).orElse(false)
+						? HpcDataTransferDownloadStatus.HYPERFILE_STAGING
+						: HpcDataTransferDownloadStatus.RECEIVED);
 		downloadTask.setInProcess(false);
 		downloadTask.setDataTransferType(HpcDataTransferType.GLOBUS);
 		downloadTask.setPercentComplete(0);
@@ -2334,10 +2427,11 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 	}
 
 	/**
-	 * Perform a download request to user's provided AWS S3 destination from S3
-	 * archive.
+	 * Perform a download request to user's provided AWS S3 destination from POSIX /
+	 * S3 archive.
 	 *
 	 * @param downloadRequest           The data object download request.
+	 * @param dataTransferType          The archive's data transfer type.
 	 * @param response                  The download response object. This method
 	 *                                  sets download task id and destination
 	 *                                  location on the response.
@@ -2345,19 +2439,28 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 	 * @throws HpcException on service failure.
 	 */
 	private void performS3AsynchronousDownload(HpcDataObjectDownloadRequest downloadRequest,
-			HpcDataObjectDownloadResponse response, HpcDataTransferConfiguration dataTransferConfiguration)
-			throws HpcException {
+			HpcDataTransferType dataTransferType, HpcDataObjectDownloadResponse response,
+			HpcDataTransferConfiguration dataTransferConfiguration) throws HpcException {
 
 		HpcStreamingDownload s3Download = new HpcStreamingDownload(downloadRequest, dataDownloadDAO, eventService,
 				this);
 
+		Object authenticatedToken = null;
+		if (!dataTransferType.equals(HpcDataTransferType.S_3)) {
+			// This is a download from POSIX archive. Generate a download URL from POSIX.
+			downloadRequest.setArchiveLocationURL(generateDownloadRequestURL(downloadRequest.getPath(),
+					downloadRequest.getArchiveLocation(), dataTransferType, downloadRequest.getConfigurationId(),
+					downloadRequest.getS3ArchiveConfigurationId()));
+		} else {
+			authenticatedToken = getAuthenticatedToken(HpcDataTransferType.S_3, downloadRequest.getConfigurationId(),
+					downloadRequest.getS3ArchiveConfigurationId());
+		}
+
 		// Perform the S3 download (From S3 Archive to User's S3 bucket in AWS or 3rd
 		// party provider).
 		try {
-			dataTransferProxies.get(HpcDataTransferType.S_3).downloadDataObject(
-					getAuthenticatedToken(HpcDataTransferType.S_3, downloadRequest.getConfigurationId(),
-							downloadRequest.getS3ArchiveConfigurationId()),
-					downloadRequest, dataTransferConfiguration.getBaseArchiveDestination(), s3Download,
+			dataTransferProxies.get(HpcDataTransferType.S_3).downloadDataObject(authenticatedToken, downloadRequest,
+					dataTransferConfiguration.getBaseArchiveDestination(), s3Download,
 					dataTransferConfiguration.getEncryptedTransfer());
 
 			// Populate the response object.
@@ -2426,7 +2529,6 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 	 * @param response                  The download response object. This method
 	 *                                  sets download task id and destination
 	 *                                  location on the response. it exists.
-	 * @param baseArchiveDestination    The base archive destination of the
 	 *                                  requested data object.
 	 * @param dataTransferConfiguration The data transfer configuration.
 	 * @throws HpcException on service failure.
@@ -2512,7 +2614,7 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 	}
 
 	/**
-	 * Generate a (pre-signed) download URL for a data object file.
+	 * Generate a download URL for a data object file.
 	 *
 	 * @param path                     The data object path.
 	 * @param archiveLocation          The archive file location.
@@ -2541,6 +2643,7 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		// Generate and return the download URL.
 		return dataTransferProxies.get(dataTransferType).generateDownloadRequestURL(
 				getAuthenticatedToken(dataTransferType, configurationId, s3ArchiveConfigurationId), archiveLocation,
+				dataTransferConfiguration.getBaseArchiveDestination(),
 				dataTransferConfiguration.getUploadRequestURLExpiration());
 	}
 
@@ -2753,6 +2856,34 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		}
 	}
 
+	/**
+	 * Get download source location for a second hop. The second hop source is on
+	 * DME Globus endpoint.
+	 *
+	 * @param configurationId          The data management configuration ID.
+	 * @param s3ArchiveConfigurationId (Optional) The S3 Archive configuration ID.
+	 *                                 Used to identify the S3 archive the
+	 *                                 data-object is stored in. This is only
+	 *                                 applicable for S3 archives, not POSIX.
+	 * @param dataTransferType         The data transfer type.
+	 * @return The download source location.
+	 * @throws HpcException on data transfer system failure.
+	 */
+	private HpcFileLocation getSecondHopDownloadSourceLocation(String configurationId, String s3ArchiveConfigurationId,
+			HpcDataTransferType dataTransferType) throws HpcException {
+		// Get the data transfer configuration.
+		HpcArchive baseDownloadSource = dataManagementConfigurationLocator
+				.getDataTransferConfiguration(configurationId, s3ArchiveConfigurationId, dataTransferType)
+				.getBaseDownloadSource();
+
+		// Create a source location. (This is a local GLOBUS endpoint).
+		HpcFileLocation sourceLocation = new HpcFileLocation();
+		sourceLocation.setFileContainerId(baseDownloadSource.getFileLocation().getFileContainerId());
+		sourceLocation.setFileId(baseDownloadSource.getFileLocation().getFileId() + "/" + UUID.randomUUID().toString());
+
+		return sourceLocation;
+	}
+
 	// ---------------------------------------------------------------------//
 	// Setter Methods to support JUnit Testing (for injecting Mocks)
 	// ---------------------------------------------------------------------//
@@ -2797,7 +2928,7 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		public HpcSecondHopDownload(HpcDataObjectDownloadRequest firstHopDownloadRequest,
 				HpcDataTransferDownloadStatus dataTransferDownloadStatus) throws HpcException {
 			// Create the second-hop archive location and destination
-			HpcFileLocation secondHopArchiveLocation = getDownloadSourceLocation(
+			HpcFileLocation secondHopArchiveLocation = getSecondHopDownloadSourceLocation(
 					firstHopDownloadRequest.getConfigurationId(), firstHopDownloadRequest.getS3ArchiveConfigurationId(),
 					HpcDataTransferType.GLOBUS);
 			HpcGlobusDownloadDestination secondHopGlobusDestination = new HpcGlobusDownloadDestination();
@@ -2836,8 +2967,9 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 		 */
 		public HpcSecondHopDownload(HpcDataObjectDownloadTask downloadTask) throws HpcException {
 			// Create the second-hop archive location and destination
-			HpcFileLocation secondHopArchiveLocation = getDownloadSourceLocation(downloadTask.getConfigurationId(),
-					downloadTask.getS3ArchiveConfigurationId(), HpcDataTransferType.GLOBUS);
+			HpcFileLocation secondHopArchiveLocation = getSecondHopDownloadSourceLocation(
+					downloadTask.getConfigurationId(), downloadTask.getS3ArchiveConfigurationId(),
+					HpcDataTransferType.GLOBUS);
 
 			// Get the data transfer configuration.
 			HpcDataTransferConfiguration dataTransferConfiguration = dataManagementConfigurationLocator
@@ -3026,33 +3158,6 @@ public class HpcDataTransferServiceImpl implements HpcDataTransferService {
 			}
 		}
 
-		/**
-		 * Get download source location.
-		 *
-		 * @param configurationId          The data management configuration ID.
-		 * @param s3ArchiveConfigurationId (Optional) The S3 Archive configuration ID.
-		 *                                 Used to identify the S3 archive the
-		 *                                 data-object is stored in. This is only
-		 *                                 applicable for S3 archives, not POSIX.
-		 * @param dataTransferType         The data transfer type.
-		 * @return The download source location.
-		 * @throws HpcException on data transfer system failure.
-		 */
-		private HpcFileLocation getDownloadSourceLocation(String configurationId, String s3ArchiveConfigurationId,
-				HpcDataTransferType dataTransferType) throws HpcException {
-			// Get the data transfer configuration.
-			HpcArchive baseDownloadSource = dataManagementConfigurationLocator
-					.getDataTransferConfiguration(configurationId, s3ArchiveConfigurationId, dataTransferType)
-					.getBaseDownloadSource();
-
-			// Create a source location. (This is a local GLOBUS endpoint).
-			HpcFileLocation sourceLocation = new HpcFileLocation();
-			sourceLocation.setFileContainerId(baseDownloadSource.getFileLocation().getFileContainerId());
-			sourceLocation
-					.setFileId(baseDownloadSource.getFileLocation().getFileId() + "/" + UUID.randomUUID().toString());
-
-			return sourceLocation;
-		}
 	}
 
 }

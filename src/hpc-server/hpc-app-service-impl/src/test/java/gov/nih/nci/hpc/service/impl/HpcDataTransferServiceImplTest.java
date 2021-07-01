@@ -210,7 +210,7 @@ public class HpcDataTransferServiceImplTest {
 		when(systemAccountLocatorMock.getSystemAccount(anyObject())).thenReturn(new HpcIntegratedSystemAccount());
 		when(dataTransferProxyMock.authenticate(anyObject(), anyObject(), anyObject(), anyObject()))
 				.thenReturn("token");
-		when(dataTransferProxyMock.generateDownloadRequestURL(anyObject(), anyObject(), anyObject()))
+		when(dataTransferProxyMock.generateDownloadRequestURL(anyObject(), anyObject(), anyObject(), anyObject()))
 				.thenReturn("https://downloadURL");
 
 		HpcFileLocation archiveLocation = new HpcFileLocation();
@@ -302,6 +302,11 @@ public class HpcDataTransferServiceImplTest {
 		HpcS3DownloadDestination s3loadDestination = new HpcS3DownloadDestination();
 		s3loadDestination.setDestinationLocation(destinationLocation);
 		s3loadDestination.setAccount(s3Account);
+		
+		HpcPathAttributes pathAttributes = new HpcPathAttributes();
+		pathAttributes.setIsAccessible(true);
+		when(dataTransferProxyMock.getPathAttributes(anyObject(), same(destinationLocation), eq(false)))
+		.thenReturn(pathAttributes);
 
 		// Run the test.
 		HpcDataObjectDownloadResponse downloadResponse = dataTransferService.downloadDataObject("/test/path",

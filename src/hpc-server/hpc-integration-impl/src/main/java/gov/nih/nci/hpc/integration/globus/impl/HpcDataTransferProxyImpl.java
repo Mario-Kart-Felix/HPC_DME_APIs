@@ -5,6 +5,7 @@ import static gov.nih.nci.hpc.util.HpcUtil.exec;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -171,7 +172,8 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 	public HpcDataObjectUploadResponse uploadDataObject(Object authenticatedToken,
 			HpcDataObjectUploadRequest uploadRequest, HpcArchive baseArchiveDestination,
 			Integer uploadRequestURLExpiration, HpcDataTransferProgressListener progressListener,
-			List<HpcMetadataEntry> metadataEntries, Boolean encryptedTransfer) throws HpcException {
+			List<HpcMetadataEntry> metadataEntries, Boolean encryptedTransfer, String storageClass)
+			throws HpcException {
 		// Progress listener not supported.
 		if (progressListener != null) {
 			throw new HpcException("Globus data transfer doesn't support progress listener",
@@ -197,7 +199,7 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 			// file-system.
 			// No Globus action is required here.
 			return saveFile(uploadRequest.getSourceFile(), archiveDestinationLocation, baseArchiveDestination,
-					uploadRequest.getSudoPassword());
+					uploadRequest.getSudoPassword(), uploadRequest.getSystemAccountName());
 		}
 
 		// If the archive destination file exists, generate a new archive destination w/
@@ -244,11 +246,14 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 			// This is a synchronous download request.
 			String archiveFilePath = downloadRequest.getArchiveLocation().getFileId().replaceFirst(
 					baseArchiveDestination.getFileLocation().getFileId(), baseArchiveDestination.getDirectory());
+
 			try {
-				// Copy the file to the download stage area.
-				FileUtils.copyFile(new File(archiveFilePath), downloadRequest.getFileDestination());
-			} catch (IOException e) {
-				throw new HpcException("Failed to stage file from file system archive: " + archiveFilePath,
+				exec("cp " + archiveFilePath + " " + downloadRequest.getFileDestination(),
+						downloadRequest.getSudoPassword());
+
+			} catch (HpcException e) {
+				throw new HpcException(
+						"Failed to copy file from POSIX archive: " + archiveFilePath + "[" + e.getMessage() + "]",
 						HpcErrorType.DATA_TRANSFER_ERROR, e);
 			}
 
@@ -264,9 +269,23 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 	}
 
 	@Override
+	public String generateDownloadRequestURL(Object authenticatedToken, HpcFileLocation archiveLocation,
+			HpcArchive baseArchiveDestination, Integer downloadRequestURLExpiration) throws HpcException {
+		try {
+			return Paths
+					.get(archiveLocation.getFileId().replaceFirst(baseArchiveDestination.getFileLocation().getFileId(),
+							baseArchiveDestination.getDirectory()))
+					.toUri().toURL().toString();
+
+		} catch (IOException e) {
+			throw new HpcException("Failed to generate download URL", HpcErrorType.UNEXPECTED_ERROR, e);
+		}
+	}
+
+	@Override
 	public String setDataObjectMetadata(Object authenticatedToken, HpcFileLocation fileLocation,
-			HpcArchive baseArchiveDestination, List<HpcMetadataEntry> metadataEntries, String sudoPassword)
-			throws HpcException {
+			HpcArchive baseArchiveDestination, List<HpcMetadataEntry> metadataEntries, String sudoPassword,
+			String storageClass) throws HpcException {
 		String archiveFilePath = fileLocation.getFileId().replaceFirst(
 				baseArchiveDestination.getFileLocation().getFileId(), baseArchiveDestination.getDirectory());
 
@@ -289,16 +308,22 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 
 	@Override
 	public void deleteDataObject(Object authenticatedToken, HpcFileLocation fileLocation,
-			HpcArchive baseArchiveDestination) throws HpcException {
+			HpcArchive baseArchiveDestination, String sudoPassword) throws HpcException {
 		String archiveFilePath = fileLocation.getFileId().replaceFirst(
 				baseArchiveDestination.getFileLocation().getFileId(), baseArchiveDestination.getDirectory());
 		// Delete the archive file.
-		if (!FileUtils.deleteQuietly(new File(archiveFilePath))) {
-			logger.error("Failed to delete file: {}", archiveFilePath);
+		try {
+			exec("rm " + archiveFilePath, sudoPassword);
+
+		} catch (HpcException e) {
+			logger.error("Failed to delete file: {}", archiveFilePath, e);
 		}
 		// Delete the metadata file.
-		if (!FileUtils.deleteQuietly(getMetadataFile(archiveFilePath))) {
-			logger.error("Failed to delete metadata for file: {}", archiveFilePath);
+		try {
+			exec("rm " + getMetadataFile(archiveFilePath).getAbsolutePath(), sudoPassword);
+
+		} catch (HpcException e) {
+			logger.error("Failed to delete metadata for file: {}", archiveFilePath, e);
 		}
 	}
 
@@ -751,20 +776,25 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 	 * @param baseArchiveDestination     The base archive destination.
 	 * @param sudoPassword               (Optional) a sudo password to perform the
 	 *                                   copy to the POSIX archive.
+	 * @param systemAccount              (Optional) system account to perform the
+	 *                                   copy to the POSIX archive and keep system
+	 *                                   account as owner
 	 * 
 	 * @return A data object upload response object.
 	 * @throws HpcException on IO exception.
 	 */
 	private HpcDataObjectUploadResponse saveFile(File sourceFile, HpcFileLocation archiveDestinationLocation,
-			HpcArchive baseArchiveDestination, String sudoPassword) throws HpcException {
+			HpcArchive baseArchiveDestination, String sudoPassword, String systemAccount) throws HpcException {
 		Calendar transferStarted = Calendar.getInstance();
 		String archiveFilePath = archiveDestinationLocation.getFileId().replaceFirst(
 				baseArchiveDestination.getFileLocation().getFileId(), baseArchiveDestination.getDirectory());
 		String archiveDirectory = archiveFilePath.substring(0, archiveFilePath.lastIndexOf('/'));
 
 		try {
-			exec("mkdir -p " + archiveDirectory, sudoPassword);
+			exec("install -d -o " + systemAccount + " " + archiveDirectory, sudoPassword);
+			exec("chown -R " + systemAccount + " " + baseArchiveDestination.getDirectory(), sudoPassword);
 			exec("cp " + sourceFile.getAbsolutePath() + " " + archiveFilePath, sudoPassword);
+			exec("chown " + systemAccount + " " + archiveFilePath, sudoPassword);
 
 		} catch (HpcException e) {
 			throw new HpcException(
