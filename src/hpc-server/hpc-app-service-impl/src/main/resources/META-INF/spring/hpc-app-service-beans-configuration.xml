@@ -45,6 +45,7 @@
   		<entry key="GLOBUS" value-ref="hpcGlobusDataTransferProxy" />
   		<entry key="S_3" value-ref="hpcS3DataTransferProxy" />
   		<entry key="GOOGLE_DRIVE" value-ref="hpcGoogleDriveDataTransferProxy" />
+  		<entry key="GOOGLE_CLOUD_STORAGE" value-ref="hpcGoogleCloudStorageDataTransferProxy" />
 	</util:map>
 	
 	<!--  HPC System Accounts Locator -->
@@ -117,6 +118,8 @@
 		<constructor-arg value="${hpc.service.dataManagement.systemAdminSubjects}" />
 		<constructor-arg value="${hpc.service.dataManagement.defaultBaseUiURL}" />
 		<constructor-arg value="${hpc.service.dataManagement.defaultBulkRegistrationStatusUiDeepLink}" />
+		<constructor-arg value="${hpc.service.dataManagement.deletedBasePath}" />
+		<constructor-arg value="${hpc.service.dataManagement.deletedDataObjectRetentionDays}" />
 	</bean>
 	<bean id="hpcDataManagementSecurityService" class="gov.nih.nci.hpc.service.impl.HpcDataManagementSecurityServiceImpl" />
 	

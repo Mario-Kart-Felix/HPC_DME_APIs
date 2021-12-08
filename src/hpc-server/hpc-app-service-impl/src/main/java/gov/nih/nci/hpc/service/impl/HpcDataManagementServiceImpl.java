@@ -17,6 +17,9 @@ import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.DATA_TRANSFER_ST
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.DEEP_ARCHIVE_STATUS_ATTRIBUTE;
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.LINK_SOURCE_PATH_ATTRIBUTE;
 
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
@@ -152,6 +155,10 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 	// streaming.
 	private List<HpcMetadataQuery> dataTransferStreamingInProgressQuery = new ArrayList<>();
 
+	// Prepared query to get data objects that have their data transfer upload
+	// failed via streaming.
+	private List<HpcMetadataQuery> dataTransferStreamingFailedQuery = new ArrayList<>();
+
 	// Prepared query to get data objects that have their data transfer upload via
 	// streaming has
 	// stopped.
@@ -171,12 +178,22 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 	// Prepared query to get data objects that have tier deep archive in-progress
 	private List<HpcMetadataQuery> deepArchiveInProgressQuery = new ArrayList<>();
 
+	// Prepared query to get data objects that have data transfer deleted that is
+	// older than the retention
+	private List<HpcMetadataQuery> deletedDataObjectsQuery = new ArrayList<>();
+
 	// List of subjects (user-id / group-name) that permission update is not
 	// allowed.
 	private List<String> systemAdminSubjects = new ArrayList<>();
 
 	// Default UI (deep link) URL to check on bulk registration status.
 	private String defaultBulkRegistrationStatusUiURL = null;
+
+	// Archive used to support soft deleted collections and data objects.
+	private String deletedBasePath = null;
+
+	// The number of days a deleted data object is retained
+	private Integer deletedDataObjectRetentionDays = 0;
 
 	// The logger instance.
 	private final Logger logger = LoggerFactory.getLogger(this.getClass().getName());
@@ -200,7 +217,8 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 	 *                                                displayed.
 	 */
 	private HpcDataManagementServiceImpl(String systemAdminSubjects, String defaultBaseUiURL,
-			String defaultBulkRegistrationStatusUiDeepLink) {
+			String defaultBulkRegistrationStatusUiDeepLink, String deletedBasePath,
+			int deletedDataObjectRetentionDays) {
 		// Prepare the query to get data objects in data transfer status of received.
 		dataTransferReceivedQuery.add(toMetadataQuery(DATA_TRANSFER_STATUS_ATTRIBUTE, HpcMetadataQueryOperator.EQUAL,
 				HpcDataTransferUploadStatus.RECEIVED.value()));
@@ -226,6 +244,11 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 		dataTransferStreamingInProgressQuery.add(toMetadataQuery(DATA_TRANSFER_STATUS_ATTRIBUTE,
 				HpcMetadataQueryOperator.EQUAL, HpcDataTransferUploadStatus.STREAMING_IN_PROGRESS.value()));
 
+		// Prepared query to get data objects that have their data transfer upload
+		// failed via streaming
+		dataTransferStreamingFailedQuery.add(toMetadataQuery(DATA_TRANSFER_STATUS_ATTRIBUTE,
+				HpcMetadataQueryOperator.EQUAL, HpcDataTransferUploadStatus.STREAMING_FAILED.value()));
+
 		// Prepared query to get data objects that have their data transfer upload via
 		// streaming
 		// stopped.
@@ -250,12 +273,21 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 		deepArchiveInProgressQuery.add(toMetadataQuery(DEEP_ARCHIVE_STATUS_ATTRIBUTE, HpcMetadataQueryOperator.EQUAL,
 				HpcDeepArchiveStatus.IN_PROGRESS.value()));
 
+		// Prepared query to get data objects that have their data transfer delete
+		// requested
+		deletedDataObjectsQuery.add(toMetadataQuery(DATA_TRANSFER_STATUS_ATTRIBUTE, HpcMetadataQueryOperator.EQUAL,
+				HpcDataTransferUploadStatus.DELETE_REQUESTED.value()));
+
 		// Populate the list of system admin subjects (user-id / group-name). Set
 		// permission is not
 		// allowed for these subjects.
 		this.systemAdminSubjects.addAll(Arrays.asList(systemAdminSubjects.split("\\s+")));
 
 		defaultBulkRegistrationStatusUiURL = defaultBaseUiURL + '/' + defaultBulkRegistrationStatusUiDeepLink;
+
+		this.deletedBasePath = deletedBasePath;
+
+		this.deletedDataObjectRetentionDays = deletedDataObjectRetentionDays;
 	}
 
 	/**
@@ -445,6 +477,124 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 			}
 		});
 
+	}
+
+	@Override
+	public void softDelete(String sourcePath, Optional<Boolean> pathTypeValidation) throws HpcException {
+		Object authenticatedToken = dataManagementAuthenticator.getAuthenticatedToken();
+
+		// Validate the source path exists.
+		HpcPathAttributes sourcePathAttributes = dataManagementProxy.getPathAttributes(authenticatedToken, sourcePath);
+		if (!sourcePathAttributes.getExists()) {
+			throw new HpcException("Source path doesn't exist", HpcErrorType.INVALID_REQUEST_INPUT);
+		}
+
+		// Optionally perform path type validation.
+		if (pathTypeValidation.isPresent()) {
+			if (pathTypeValidation.get()) {
+				if (!sourcePathAttributes.getIsDirectory()) {
+					throw new HpcException("Source path is not of a collection", HpcErrorType.INVALID_REQUEST_INPUT);
+				}
+			} else if (!sourcePathAttributes.getIsFile()) {
+				throw new HpcException("Source path is not of a data object", HpcErrorType.INVALID_REQUEST_INPUT);
+			}
+		}
+
+		// Construct the destination path.
+		String destinationPath = deletedBasePath + sourcePath;
+		// Validate the destination path doesn't exist already.
+		HpcPathAttributes destinationPathAttributes = dataManagementProxy.getPathAttributes(authenticatedToken,
+				destinationPath);
+		if (destinationPathAttributes.getExists()) {
+			// If destination path already exists, append timestamp to make the path unique.
+			String dateFormat = "yyyyMMddHHmmss";
+			LocalDateTime date = LocalDateTime.now(ZoneId.of("UTC-04:00"));
+			destinationPath = destinationPath + "_" + date.format(DateTimeFormatter.ofPattern(dateFormat));
+		}
+
+		// Validate the destination parent path exists.
+		// If it doesn't exist, create the parent collection.
+		String sourceParentPath = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
+		String destinationParentPath = destinationPath.substring(0, destinationPath.lastIndexOf('/'));
+		HpcPathAttributes destinationParentPathAttributes = dataManagementProxy.getPathAttributes(authenticatedToken,
+				destinationParentPath);
+		if (!destinationParentPathAttributes.getExists()) {
+			// Create destination parent collection recursively. Copy all metadata and
+			// permissions
+			copyCollection(authenticatedToken, sourceParentPath, destinationParentPath);
+		}
+
+		// Perform the move request.
+		dataManagementProxy.move(authenticatedToken, sourcePath, destinationPath);
+
+		// Remove permissions
+		List<HpcSubjectPermission> permissions = getDataObjectPermissions(destinationPath);
+		HpcIntegratedSystemAccount dataManagementAccount = systemAccountLocator
+				.getSystemAccount(HpcIntegratedSystem.IRODS);
+		if (dataManagementAccount == null) {
+			throw new HpcException("System Data Management Account not configured", HpcErrorType.UNEXPECTED_ERROR);
+		}
+
+		for (HpcSubjectPermission permission : permissions) {
+			// Exclude system accounts and system admin group
+			String subject = permission.getSubject();
+			if (!subject.equals(dataManagementAccount.getUsername()) && !systemAdminSubjects.contains(subject)) {
+				permission.setPermission(HpcPermission.NONE);
+				setDataObjectPermission(destinationPath, permission);
+			}
+		}
+
+		metadataService.updateDataObjectSystemGeneratedMetadata(destinationPath, null, null, null,
+				HpcDataTransferUploadStatus.DELETE_REQUESTED, null, null, null, null, null, null, null, null);
+	}
+
+	@Override
+	public void recover(String sourcePath, Optional<Boolean> pathTypeValidation) throws HpcException {
+		Object authenticatedToken = dataManagementAuthenticator.getAuthenticatedToken();
+
+		// Validate the source path exists.
+		HpcPathAttributes sourcePathAttributes = dataManagementProxy.getPathAttributes(authenticatedToken, sourcePath);
+		if (!sourcePathAttributes.getExists()) {
+			throw new HpcException("Source path doesn't exist", HpcErrorType.INVALID_REQUEST_INPUT);
+		}
+
+		// Optionally perform path type validation.
+		if (pathTypeValidation.isPresent()) {
+			if (pathTypeValidation.get()) {
+				if (!sourcePathAttributes.getIsDirectory()) {
+					throw new HpcException("Source path is not of a collection", HpcErrorType.INVALID_REQUEST_INPUT);
+				}
+			} else if (!sourcePathAttributes.getIsFile()) {
+				throw new HpcException("Source path is not of a data object", HpcErrorType.INVALID_REQUEST_INPUT);
+			}
+		}
+
+		// Construct the destination path.
+		String destinationPath = sourcePath.replace(deletedBasePath, "");
+		// Validate the destination path doesn't exist already.
+		HpcPathAttributes destinationPathAttributes = dataManagementProxy.getPathAttributes(authenticatedToken,
+				destinationPath);
+		if (destinationPathAttributes.getExists()) {
+			throw new HpcException("Destination path already exists", HpcErrorType.INVALID_REQUEST_INPUT);
+		}
+
+		// Validate the destination parent path exists.
+		// If it doesn't exist, create the parent collection.
+		String sourceParentPath = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
+		String destinationParentPath = destinationPath.substring(0, destinationPath.lastIndexOf('/'));
+		HpcPathAttributes destinationParentPathAttributes = dataManagementProxy.getPathAttributes(authenticatedToken,
+				destinationParentPath);
+		if (!destinationParentPathAttributes.getExists()) {
+			// Create destination parent collection recursively. Copy all metadata and
+			// permissions
+			copyCollection(authenticatedToken, sourceParentPath, destinationParentPath);
+		}
+
+		// Perform the move request.
+		dataManagementProxy.move(authenticatedToken, sourcePath, destinationPath);
+
+		metadataService.updateDataObjectSystemGeneratedMetadata(destinationPath, null, null, null,
+				HpcDataTransferUploadStatus.RECOVER_REQUESTED, null, null, null, null, null, null, null, null);
 	}
 
 	@Override
@@ -644,6 +794,12 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 	public List<HpcDataObject> getDataTranferUploadStreamingInProgress() throws HpcException {
 		return dataManagementProxy.getDataObjects(dataManagementAuthenticator.getAuthenticatedToken(),
 				dataTransferStreamingInProgressQuery);
+	}
+
+	@Override
+	public List<HpcDataObject> getDataTranferUploadStreamingFailed() throws HpcException {
+		return dataManagementProxy.getDataObjects(dataManagementAuthenticator.getAuthenticatedToken(),
+				dataTransferStreamingFailedQuery);
 	}
 
 	@Override
@@ -1015,6 +1171,24 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 				deepArchiveInProgressQuery);
 	}
 
+	@Override
+	public List<HpcDataObject> getDeletedDataObjects() throws HpcException {
+		return dataManagementProxy.getDataObjects(dataManagementAuthenticator.getAuthenticatedToken(),
+				deletedDataObjectsQuery);
+	}
+
+	@Override
+	public boolean deletedDataObjectExpired(Calendar deletedDate) {
+		if (deletedDate == null) {
+			return false;
+		}
+
+		// Check if the deleted date is older than the retention period
+		deletedDate.add(Calendar.DAY_OF_MONTH, deletedDataObjectRetentionDays);
+		// If expired, return true
+		return deletedDate.before(Calendar.getInstance());
+	}
+
 	// ---------------------------------------------------------------------//
 	// Helper Methods
 	// ---------------------------------------------------------------------//
@@ -1080,6 +1254,9 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 		if (registrationRequest.getGoogleDriveUploadSource() != null) {
 			uploadSourceCount++;
 		}
+		if (registrationRequest.getGoogleCloudStorageUploadSource() != null) {
+			uploadSourceCount++;
+		}
 		if (registrationRequest.getFileSystemUploadSource() != null) {
 			uploadSourceCount++;
 		}
@@ -1088,11 +1265,13 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 		}
 		if (uploadSourceCount > 1) {
 			throw new HpcException(
-					"Multiple (Globus/S3/Google Drive/File System/Link) upload source provided for: " + path,
+					"Multiple (Globus/S3/Google Drive/Google Storage/File System/Link) upload source provided for: "
+							+ path,
 					HpcErrorType.INVALID_REQUEST_INPUT);
 		}
 		if (uploadSourceCount == 0) {
-			throw new HpcException("No Globus/S3/Google Drive/File System/Link upload source provided for: " + path,
+			throw new HpcException(
+					"No Globus/S3/Google Drive/Google Storage/File System/Link upload source provided for: " + path,
 					HpcErrorType.INVALID_REQUEST_INPUT);
 		}
 
@@ -1121,7 +1300,19 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 						HpcErrorType.INVALID_REQUEST_INPUT);
 			}
 			if (StringUtils.isEmpty(registrationRequest.getGoogleDriveUploadSource().getAccessToken())) {
-				throw new HpcException("Invalid Google Drive account in registration request for: " + path,
+				throw new HpcException("Invalid Google Drive token in registration request for: " + path,
+						HpcErrorType.INVALID_REQUEST_INPUT);
+			}
+		}
+
+		if (registrationRequest.getGoogleCloudStorageUploadSource() != null) {
+			if (!isValidFileLocation(registrationRequest.getGoogleCloudStorageUploadSource().getSourceLocation())) {
+				throw new HpcException(
+						"Invalid Google Cloud Storage upload source in registration request for: " + path,
+						HpcErrorType.INVALID_REQUEST_INPUT);
+			}
+			if (StringUtils.isEmpty(registrationRequest.getGoogleCloudStorageUploadSource().getAccessToken())) {
+				throw new HpcException("Invalid Google Cloud Storage token in registration request for: " + path,
 						HpcErrorType.INVALID_REQUEST_INPUT);
 			}
 		}
@@ -1130,6 +1321,40 @@ public class HpcDataManagementServiceImpl implements HpcDataManagementService {
 				&& !isValidFileLocation(registrationRequest.getFileSystemUploadSource().getSourceLocation())) {
 			throw new HpcException("Invalid File System upload source in registration request for: " + path,
 					HpcErrorType.INVALID_REQUEST_INPUT);
+		}
+	}
+
+	private void copyCollection(Object authenticatedToken, String sourcePath, String destinationPath)
+			throws HpcException {
+		// Validate the destination parent path exists.
+		// If it doesn't exist, create the parent collection.
+		String sourceParentPath = sourcePath.substring(0, sourcePath.lastIndexOf('/'));
+		String destinationParentPath = destinationPath.substring(0, destinationPath.lastIndexOf('/'));
+		HpcPathAttributes destinationParentPathAttributes = dataManagementProxy.getPathAttributes(authenticatedToken,
+				destinationParentPath);
+		if (!destinationParentPathAttributes.getExists()) {
+			// Create destination parent collection recursively. Copy all metadata and
+			// permissions
+			copyCollection(authenticatedToken, sourceParentPath, destinationParentPath);
+		}
+		// Create directory
+		boolean created = createDirectory(destinationPath);
+
+		// Attach the metadata.
+		if (created) {
+			boolean copyCompleted = false;
+			try {
+				// Copy user and extracted and system metadata
+				HpcMetadataEntries metadataEntries = metadataService.getCollectionMetadataEntries(sourcePath);
+				metadataService.copyMetadataToCollection(destinationPath, metadataEntries.getSelfMetadataEntries());
+				copyCompleted = true;
+			} finally {
+				if (!copyCompleted) {
+					// Collection registration failed. Remove it from Data Management.
+					delete(destinationPath, true);
+				}
+			}
+
 		}
 	}
 }

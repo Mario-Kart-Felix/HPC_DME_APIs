@@ -192,10 +192,12 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 			return uploadDataObject(authenticatedToken, uploadRequest.getSourceFile(), archiveDestinationLocation,
 					progressListener, baseArchiveDestination.getType(), metadataEntries, storageClass);
 		} else {
-			// Upload by streaming from AWS, 3rd Party S3 Provider, or Google Drive source.
+			// Upload by streaming from AWS, 3rd Party S3 Provider, Google Drive or Google
+			// Cloud Storage source.
 			return uploadDataObject(authenticatedToken, uploadRequest.getS3UploadSource(),
-					uploadRequest.getGoogleDriveUploadSource(), archiveDestinationLocation, baseArchiveDestination,
-					uploadRequest.getSourceSize(), progressListener, metadataEntries, storageClass);
+					uploadRequest.getGoogleDriveUploadSource(), uploadRequest.getGoogleCloudStorageUploadSource(),
+					archiveDestinationLocation, baseArchiveDestination, uploadRequest.getSourceSize(), progressListener,
+					metadataEntries, storageClass);
 		}
 	}
 
@@ -427,6 +429,7 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 			HpcMetadataEntry entry = new HpcMetadataEntry();
 			entry.setAttribute("storage_class");
 			// x-amz-storage-class is not returned for standard S3 object
+			logger.debug("Storage class " + s3Metadata.getStorageClass());
 			if (s3Metadata.getStorageClass() != null)
 				objectMetadata.setDeepArchiveStatus(HpcDeepArchiveStatus.fromValue(s3Metadata.getStorageClass()));
 
@@ -451,7 +454,7 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 			}
 
 			if (restoreFlag != null)
-				logger.info("Restoration status: %s.\n",
+				logger.info("Restoration status: {}",
 						restoreFlag ? "in progress" : "not in progress (finished or failed)");
 
 			objectMetadata.setChecksum(s3Metadata.getETag());
@@ -569,11 +572,15 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 				for (Rule rule : configuration.getRules()) {
 					// Look through filter prefix applied to lifecycle policy
 					boolean hasTransition = false;
-					for (Transition transition : rule.getTransitions()) {
-						if (transition.getStorageClassAsString() != null
-								&& !transition.getStorageClassAsString().isEmpty())
-							hasTransition = true;
+
+					if (rule.getTransitions() != null) {
+						for (Transition transition : rule.getTransitions()) {
+							if (transition.getStorageClassAsString() != null
+									&& !transition.getStorageClassAsString().isEmpty())
+								hasTransition = true;
+						}
 					}
+
 					if (hasTransition && rule.getFilter() != null && rule.getFilter().getPredicate() != null) {
 						LifecycleFilterPredicate predicate = rule.getFilter().getPredicate();
 						if (predicate instanceof LifecyclePrefixPredicate) {
@@ -672,33 +679,37 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 	 * Upload a data object file from AWS, 3rd Party S3 Provider or Google Drive
 	 * source.
 	 *
-	 * @param authenticatedToken         An authenticated token.
-	 * @param s3UploadSource             The S3 upload source (AWS or 3rd party
-	 *                                   provider)
-	 * @param googleDriveUploadSource    The Google Drive upload source.
-	 * @param archiveDestinationLocation The archive destination location.
-	 * @param baseArchiveDestination     The archive's base destination location.
-	 * @param size                       the size of the file to upload.
-	 * @param progressListener           (Optional) a progress listener for async
-	 *                                   notification on transfer completion.
-	 * @param metadataEntries            The metadata entries to attach to the
-	 *                                   data-object in S3 archive.
-	 * @param storageClass               (Optional) The storage class to upload the
-	 *                                   file.
+	 * @param authenticatedToken             An authenticated token.
+	 * @param s3UploadSource                 The S3 upload source (AWS or 3rd party
+	 *                                       provider)
+	 * @param googleDriveUploadSource        The Google Drive upload source.
+	 * @param googleCloudStorageUploadSource The Google Cloud Storage upload source.
+	 * @param archiveDestinationLocation     The archive destination location.
+	 * @param baseArchiveDestination         The archive's base destination
+	 *                                       location.
+	 * @param size                           the size of the file to upload.
+	 * @param progressListener               (Optional) a progress listener for
+	 *                                       async notification on transfer
+	 *                                       completion.
+	 * @param metadataEntries                The metadata entries to attach to the
+	 *                                       data-object in S3 archive.
+	 * @param storageClass                   (Optional) The storage class to upload
+	 *                                       the file.
 	 * @return A data object upload response.
 	 * @throws HpcException on data transfer system failure.
 	 */
 	private HpcDataObjectUploadResponse uploadDataObject(Object authenticatedToken,
 			HpcStreamingUploadSource s3UploadSource, HpcStreamingUploadSource googleDriveUploadSource,
-			HpcFileLocation archiveDestinationLocation, HpcArchive baseArchiveDestination, Long size,
-			HpcDataTransferProgressListener progressListener, List<HpcMetadataEntry> metadataEntries,
-			String storageClass) throws HpcException {
+			HpcStreamingUploadSource googleCloudStorageUploadSource, HpcFileLocation archiveDestinationLocation,
+			HpcArchive baseArchiveDestination, Long size, HpcDataTransferProgressListener progressListener,
+			List<HpcMetadataEntry> metadataEntries, String storageClass) throws HpcException {
 		if (progressListener == null) {
 			throw new HpcException("[S3] No progress listener provided for a upload from AWS S3 destination",
 					HpcErrorType.UNEXPECTED_ERROR);
 		}
 		if (size == null) {
-			throw new HpcException("[S3] File size not provided for an upload from AWS S3",
+			throw new HpcException(
+					"[S3] File size not provided for an upload from AWS / S3 Provider / Google Drive / Google Cloud Storage",
 					HpcErrorType.UNEXPECTED_ERROR);
 		}
 
@@ -719,16 +730,18 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 							baseArchiveDestination, S3_STREAM_EXPIRATION)
 					: s3UploadSource.getSourceURL();
 
-		} else {
+		} else if (googleDriveUploadSource != null) {
 			// Upload by streaming from Google Drive.
 			uploadMethod = HpcDataTransferUploadMethod.GOOGLE_DRIVE;
 			sourceLocation = googleDriveUploadSource.getSourceLocation();
 
-			// We set the sourceURL to be the access-token, so it's persisted in case we
-			// need it to
-			// restart
-			// the upload following a server restart.
-			sourceURL = googleDriveUploadSource.getAccessToken();
+		} else if (googleCloudStorageUploadSource != null) {
+			// Upload by streaming from Google Drive.
+			uploadMethod = HpcDataTransferUploadMethod.GOOGLE_CLOUD_STORAGE;
+			sourceLocation = googleCloudStorageUploadSource.getSourceLocation();
+
+		} else {
+			throw new HpcException("Unexpected upload source", HpcErrorType.UNEXPECTED_ERROR);
 		}
 
 		final String url = sourceURL;
@@ -739,9 +752,14 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 		CompletableFuture<Void> s3TransferManagerUploadFuture = CompletableFuture.runAsync(() -> {
 			try {
 				// Open a connection to the input stream of the file to be uploaded.
-				InputStream sourceInputStream = googleDriveUploadSource != null
-						? googleDriveUploadSource.getSourceInputStream()
-						: new URL(url).openStream();
+				InputStream sourceInputStream = null;
+				if (googleDriveUploadSource != null) {
+					sourceInputStream = googleDriveUploadSource.getSourceInputStream();
+				} else if (googleCloudStorageUploadSource != null) {
+					sourceInputStream = googleCloudStorageUploadSource.getSourceInputStream();
+				} else {
+					sourceInputStream = new URL(url).openStream();
+				}
 
 				// Create a S3 upload request.
 				ObjectMetadata metadata = toS3Metadata(metadataEntries);

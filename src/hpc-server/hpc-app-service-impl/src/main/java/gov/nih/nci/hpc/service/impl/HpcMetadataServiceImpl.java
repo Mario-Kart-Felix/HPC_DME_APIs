@@ -32,7 +32,7 @@ import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.LINK_SOURCE_PATH
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.METADATA_UPDATED_ATTRIBUTE;
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.REGISTRAR_ID_ATTRIBUTE;
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.REGISTRAR_NAME_ATTRIBUTE;
-import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.REGISTRATION_COMPLETION_EVENT_ATTRIBUTE;
+import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.REGISTRATION_EVENT_REQUIRED_ATTRIBUTE;
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.S3_ARCHIVE_CONFIGURATION_ID_ATTRIBUTE;
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.SOURCE_FILE_GROUP_ATTRIBUTE;
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.SOURCE_FILE_GROUP_DN_ATTRIBUTE;
@@ -47,6 +47,7 @@ import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.SOURCE_FILE_URL_
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.SOURCE_FILE_USER_DN_ATTRIBUTE;
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.SOURCE_LOCATION_FILE_CONTAINER_ID_ATTRIBUTE;
 import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.SOURCE_LOCATION_FILE_ID_ATTRIBUTE;
+import static gov.nih.nci.hpc.service.impl.HpcMetadataValidator.DELETED_DATE_ATTRIBUTE;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -238,6 +239,28 @@ public class HpcMetadataServiceImpl implements HpcMetadataService {
 	}
 
 	@Override
+	public void copyMetadataToCollection(String path, List<HpcMetadataEntry> metadataEntries)
+			throws HpcException {
+		// Input validation.
+		if (path == null) {
+			throw new HpcException(INVALID_PATH_MSG, HpcErrorType.INVALID_REQUEST_INPUT);
+		} else {
+			HpcDomainValidationResult validationResult = isValidMetadataEntries(metadataEntries, false);
+			if (!validationResult.getValid()) {
+				if (StringUtils.isEmpty(validationResult.getMessage())) {
+					throw new HpcException(INVALID_METADATA_MSG, HpcErrorType.INVALID_REQUEST_INPUT);
+				} else {
+					throw new HpcException(validationResult.getMessage(), HpcErrorType.INVALID_REQUEST_INPUT);
+				}
+			}
+		}
+
+		// Add Metadata to the DM system.
+		dataManagementProxy.addMetadataToCollection(dataManagementAuthenticator.getAuthenticatedToken(), path,
+				metadataEntries);
+	}
+	
+	@Override
 	public HpcSystemGeneratedMetadata addSystemGeneratedMetadataToCollection(String path, String userId,
 			String userName, String configurationId) throws HpcException {
 		// Input validation.
@@ -368,9 +391,9 @@ public class HpcMetadataServiceImpl implements HpcMetadataService {
 			systemGeneratedMetadata.setMetadataUpdated(toCalendar(metadataMap.get(METADATA_UPDATED_ATTRIBUTE)));
 		}
 
-		if (metadataMap.get(REGISTRATION_COMPLETION_EVENT_ATTRIBUTE) != null) {
-			systemGeneratedMetadata.setRegistrationCompletionEvent(
-					Boolean.valueOf(metadataMap.get(REGISTRATION_COMPLETION_EVENT_ATTRIBUTE)));
+		if (metadataMap.get(REGISTRATION_EVENT_REQUIRED_ATTRIBUTE) != null) {
+			systemGeneratedMetadata.setRegistrationEventRequired(
+					Boolean.valueOf(metadataMap.get(REGISTRATION_EVENT_REQUIRED_ATTRIBUTE)));
 		}
 
 		if (metadataMap.get(DEEP_ARCHIVE_STATUS_ATTRIBUTE) != null) {
@@ -387,6 +410,10 @@ public class HpcMetadataServiceImpl implements HpcMetadataService {
 
 		if (metadataMap.get(DEEP_ARCHIVE_DATE_ATTRIBUTE) != null) {
 			systemGeneratedMetadata.setDeepArchiveDate(toCalendar(metadataMap.get(DEEP_ARCHIVE_DATE_ATTRIBUTE)));
+		}
+		
+		if (metadataMap.get(DELETED_DATE_ATTRIBUTE) != null) {
+			systemGeneratedMetadata.setDeletedDate(toCalendar(metadataMap.get(DELETED_DATE_ATTRIBUTE)));
 		}
 
 		HpcPathPermissions sourcePermissions = new HpcPathPermissions();
@@ -464,7 +491,7 @@ public class HpcMetadataServiceImpl implements HpcMetadataService {
 	@Override
 	public List<HpcMetadataEntry> getDefaultDataObjectMetadataEntries(HpcDirectoryScanItem scanItem) {
 		List<HpcMetadataEntry> metadataEntries = new ArrayList<>();
-		metadataEntries.add(toMetadataEntry("name", scanItem != null ? scanItem.getFileName() : "N/A"));
+		//Presently empty, placeholder
 
 		return metadataEntries;
 	}
@@ -576,7 +603,7 @@ public class HpcMetadataServiceImpl implements HpcMetadataService {
 			HpcDataTransferUploadMethod dataTransferMethod, HpcDataTransferType dataTransferType,
 			Calendar dataTransferStarted, Calendar dataTransferCompleted, Long sourceSize, String sourceURL,
 			HpcPathPermissions sourcePermissions, String callerObjectId, String userId, String userName,
-			String configurationId, String s3ArchiveConfigurationId, boolean registrationCompletionEvent)
+			String configurationId, String s3ArchiveConfigurationId, boolean registrationEventRequired)
 			throws HpcException {
 		// Input validation.
 		if (path == null || dataTransferStatus == null || dataTransferType == null || dataTransferMethod == null
@@ -653,8 +680,8 @@ public class HpcMetadataServiceImpl implements HpcMetadataService {
 		addMetadataEntry(metadataEntries, toMetadataEntry(CALLER_OBJECT_ID_ATTRIBUTE, callerObjectId));
 
 		// Create the Registration Completion Event Indicator metadata.
-		addMetadataEntry(metadataEntries, toMetadataEntry(REGISTRATION_COMPLETION_EVENT_ATTRIBUTE,
-				Boolean.toString(registrationCompletionEvent)));
+		addMetadataEntry(metadataEntries, toMetadataEntry(REGISTRATION_EVENT_REQUIRED_ATTRIBUTE,
+				Boolean.toString(registrationEventRequired)));
 
 		// Create the S3 Archive Configuration ID.
 		addMetadataEntry(metadataEntries,
@@ -743,8 +770,18 @@ public class HpcMetadataServiceImpl implements HpcMetadataService {
 
 		if (dataTransferStatus != null) {
 			// Update the Data Transfer Status metadata.
-			addMetadataEntry(metadataEntries,
-					toMetadataEntry(DATA_TRANSFER_STATUS_ATTRIBUTE, dataTransferStatus.value()));
+			if (dataTransferStatus.equals(HpcDataTransferUploadStatus.RECOVER_REQUESTED)) {
+				metadataEntries.add(toMetadataEntry(DELETED_DATE_ATTRIBUTE, ""));
+				addMetadataEntry(metadataEntries,
+						toMetadataEntry(DATA_TRANSFER_STATUS_ATTRIBUTE, HpcDataTransferUploadStatus.ARCHIVED.value()));
+			} else {
+				addMetadataEntry(metadataEntries,
+						toMetadataEntry(DATA_TRANSFER_STATUS_ATTRIBUTE, dataTransferStatus.value()));
+				if(dataTransferStatus.equals(HpcDataTransferUploadStatus.DELETE_REQUESTED)) {
+						addMetadataEntry(metadataEntries,
+								toMetadataEntry(DELETED_DATE_ATTRIBUTE, dateFormat.format(Calendar.getInstance().getTime())));
+				}
+			}
 		}
 
 		if (dataTransferType != null) {

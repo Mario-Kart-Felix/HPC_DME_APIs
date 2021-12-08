@@ -28,9 +28,11 @@
 			<xsd:enumeration value="DELETE_REQUESTED" />
 			<xsd:enumeration value="DELETED" />
 			<xsd:enumeration value="DELETE_FAILED" />
+			<xsd:enumeration value="RECOVER_REQUESTED" />
 			<xsd:enumeration value="URL_GENERATED" />
 			<xsd:enumeration value="STREAMING_IN_PROGRESS" />
 			<xsd:enumeration value="STREAMING_STOPPED" />
+			<xsd:enumeration value="STREAMING_FAILED" />
 			<xsd:enumeration value="FILE_SYSTEM_READY" />
 			<xsd:enumeration value="FILE_SYSTEM_IN_PROGRESS" />
 		</xsd:restriction>
@@ -41,6 +43,7 @@
 			<xsd:enumeration value="GLOBUS" />
 			<xsd:enumeration value="S_3" />
 			<xsd:enumeration value="GOOGLE_DRIVE" />
+			<xsd:enumeration value="GOOGLE_CLOUD_STORAGE" />
 			<xsd:enumeration value="SYNC" />
 			<xsd:enumeration value="URL_SINGLE_PART" />
 			<xsd:enumeration value="URL_MULTI_PART" />
@@ -68,6 +71,13 @@
 			<xsd:enumeration value="RESTORE_REQUESTED" />
 		</xsd:restriction>
 	</xsd:simpleType>
+	
+	<xsd:simpleType name="HpcAccessTokenType">
+		<xsd:restriction base="xsd:string">
+			<xsd:enumeration value="USER_ACCOUNT" />
+			<xsd:enumeration value="SERVICE_ACCOUNT" />
+		</xsd:restriction>
+	</xsd:simpleType>
 
 	<xsd:complexType name="HpcDataTransferDownloadReport">
 		<xsd:sequence>
@@ -85,6 +95,7 @@
 			<xsd:enumeration value="GLOBUS" />
 			<xsd:enumeration value="S_3" />
 			<xsd:enumeration value="GOOGLE_DRIVE" />
+			<xsd:enumeration value="GOOGLE_CLOUD_STORAGE" />
 		</xsd:restriction>
 	</xsd:simpleType>
 
@@ -172,9 +183,9 @@
 			<xsd:element name="account"
 				type="hpc-domain-datatransfer:HpcS3Account" />
 			<xsd:element name="accessToken" type="xsd:string" />
+			<xsd:element name="accessTokenType" type="hpc-domain-datatransfer:HpcAccessTokenType" />
 			<xsd:element name="sourceURL" type="xsd:string" />
-			<xsd:element name="sourceSize" type="xsd:long"
-				minOccurs="0" />
+			<xsd:element name="sourceSize" type="xsd:long" minOccurs="0" />
 			<xsd:element name="sourceInputStream" type="hpc-domain-datatransfer:HpcInputStream" />
 		</xsd:sequence>
 	</xsd:complexType>
@@ -195,11 +206,12 @@
 		</xsd:sequence>
 	</xsd:complexType>
 	
-	<xsd:complexType name="HpcGoogleDriveScanDirectory">
+	<xsd:complexType name="HpcGoogleScanDirectory">
 		<xsd:sequence>
 			<xsd:element name="directoryLocation"
 				type="hpc-domain-datatransfer:HpcFileLocation" />
 			<xsd:element name="accessToken" type="xsd:string" />
+			<xsd:element name="accessTokenType" type="hpc-domain-datatransfer:HpcAccessTokenType" />
 		</xsd:sequence>
 	</xsd:complexType>
 	
@@ -244,11 +256,12 @@
 	</xsd:complexType>
 
 	<xsd:complexType
-		name="HpcGoogleDriveDownloadDestination">
+		name="HpcGoogleDownloadDestination">
 		<xsd:sequence>
 			<xsd:element name="destinationLocation"
 				type="hpc-domain-datatransfer:HpcFileLocation" />
 			<xsd:element name="accessToken" type="xsd:string" />
+			<xsd:element name="accessTokenType" type="hpc-domain-datatransfer:HpcAccessTokenType" />
 		</xsd:sequence>
 	</xsd:complexType>
 
@@ -294,7 +307,9 @@
 			<xsd:element name="s3Destination"
 				type="hpc-domain-datatransfer:HpcS3DownloadDestination" />
 			<xsd:element name="googleDriveDestination"
-				type="hpc-domain-datatransfer:HpcGoogleDriveDownloadDestination" />
+				type="hpc-domain-datatransfer:HpcGoogleDownloadDestination" />
+			<xsd:element name="googleCloudStorageDestination"
+				type="hpc-domain-datatransfer:HpcGoogleDownloadDestination" />
 			<xsd:element name="fileDestination"
 				type="hpc-domain-datatransfer:HpcFile" />
 			<xsd:element name="configurationId" type="xsd:string" />
@@ -342,7 +357,9 @@
 			<xsd:element name="s3DownloadDestination"
 				type="hpc-domain-datatransfer:HpcS3DownloadDestination" />
 			<xsd:element name="googleDriveDownloadDestination"
-				type="hpc-domain-datatransfer:HpcGoogleDriveDownloadDestination" />
+				type="hpc-domain-datatransfer:HpcGoogleDownloadDestination" />
+			<xsd:element name="googleCloudStorageDownloadDestination"
+				type="hpc-domain-datatransfer:HpcGoogleDownloadDestination" />
 			<xsd:element name="destinationType"
 				type="hpc-domain-datatransfer:HpcDataTransferType" />
 			<xsd:element name="completionEvent" type="xsd:boolean" />
@@ -383,6 +400,7 @@
 				minOccurs="0" />
 			<xsd:element name="size" type="xsd:long" minOccurs="0" />
 			<xsd:element name="restoreRequested" type="xsd:boolean" minOccurs="0" />
+			<xsd:element name="retryTaskId" type="xsd:string" />
 		</xsd:sequence>
 	</xsd:complexType>
 
@@ -403,7 +421,9 @@
 			<xsd:element name="s3DownloadDestination"
 				type="hpc-domain-datatransfer:HpcS3DownloadDestination" />
 			<xsd:element name="googleDriveDownloadDestination"
-				type="hpc-domain-datatransfer:HpcGoogleDriveDownloadDestination" />
+				type="hpc-domain-datatransfer:HpcGoogleDownloadDestination" />
+			<xsd:element name="googleCloudStorageDownloadDestination"
+				type="hpc-domain-datatransfer:HpcGoogleDownloadDestination" />
 			<xsd:element name="appendPathToDownloadDestination"
 				type="xsd:boolean" />
 			<xsd:element name="status"
@@ -414,6 +434,7 @@
 			<xsd:element name="items"
 				type="hpc-domain-datatransfer:HpcCollectionDownloadTaskItem"
 				minOccurs="0" maxOccurs="unbounded" />
+			<xsd:element name="retryTaskId" type="xsd:string" />
 		</xsd:sequence>
 	</xsd:complexType>
 
