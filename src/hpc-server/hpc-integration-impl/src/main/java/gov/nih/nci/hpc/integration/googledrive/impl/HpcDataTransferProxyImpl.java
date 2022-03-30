@@ -20,16 +20,18 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 
 import com.google.api.client.googleapis.json.GoogleJsonResponseException;
+import com.google.api.client.googleapis.media.MediaHttpUploader.UploadState;
 import com.google.api.client.http.InputStreamContent;
 import com.google.api.services.drive.Drive;
+import com.google.api.services.drive.Drive.Files.Create;
 import com.google.api.services.drive.model.File;
 import com.google.api.services.drive.model.FileList;
 import com.google.common.util.concurrent.Striped;
 
 import gov.nih.nci.hpc.domain.datamanagement.HpcPathAttributes;
-import gov.nih.nci.hpc.domain.datatransfer.HpcAccessTokenType;
 import gov.nih.nci.hpc.domain.datatransfer.HpcArchive;
 import gov.nih.nci.hpc.domain.datatransfer.HpcDataObjectDownloadRequest;
 import gov.nih.nci.hpc.domain.datatransfer.HpcDirectoryScanItem;
@@ -71,6 +73,11 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 	@Qualifier("hpcGoogleDriveDownloadExecutor")
 	Executor googleDriveExecutor = null;
 
+	// The maximum size of individual chunks that will get uploaded by single HTTP
+	// request.
+	@Value("${hpc.integration.googledrive.chunkSize}")
+	int chunkSize = -1;
+
 	// The Google Drive connection instance.
 	@Autowired
 	private HpcGoogleDriveConnection googleDriveConnection = null;
@@ -101,7 +108,7 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 	// ---------------------------------------------------------------------//
 
 	@Override
-	public Object authenticate(String accessToken, HpcAccessTokenType accessTokenType) throws HpcException {
+	public Object authenticate(String accessToken) throws HpcException {
 		return googleDriveConnection.authenticate(accessToken);
 	}
 
@@ -132,11 +139,19 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 				String folderId = getFolderId(drive, destinationFolderPath, true);
 
 				// Transfer the file to Google Drive, and complete the download task.
-				progressListener.transferCompleted(drive.files()
+				Create request = drive.files()
 						.create(new File().setName(destinationFileName).setParents(Collections.singletonList(folderId)),
 								new InputStreamContent("application/octet-stream",
 										new URL(downloadRequest.getArchiveLocationURL()).openStream()))
-						.setFields("size").execute().getSize());
+						.setFields("size");
+				request.getMediaHttpUploader().setChunkSize(chunkSize);
+				request.getMediaHttpUploader().setProgressListener(uploader -> {
+					if (uploader.getUploadState().equals(UploadState.MEDIA_IN_PROGRESS)) {
+						progressListener.transferProgressed(uploader.getNumBytesUploaded());
+					}
+				});
+
+				progressListener.transferCompleted(request.execute().getSize());
 
 			} catch (IOException e) {
 				String message = "[GoogleDrive] Failed to download object: " + e.getMessage();

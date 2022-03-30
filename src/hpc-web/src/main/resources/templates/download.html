@@ -295,7 +295,10 @@
 						 th:value="${hpcSearch.getPageNumber()}"/>
 					<input type="hidden"
 						class="form-control" name="pageSize" id="pageSizeId"
-						 th:value="${hpcSearch.getPageSize()}"/>			
+						 th:value="${hpcSearch.getPageSize()}"/>
+					<input type="hidden"
+						class="form-control" name="totalSize" id="totalSizeId"
+						 th:value="${hpcSearch.getTotalSize()}"/>			
 				</form>
 				<form class="form-horizontal" id="searchForm"
 					th:object="${hpcSearch}" method="POST" th:action="@{/search}">
@@ -305,6 +308,9 @@
 						 th:value="${hpcSearch.getPageNumber()}"/> <input type="hidden"
 						class="form-control" name="pageSize" id="pageSize"
 						 th:value="${hpcSearch.getPageSize()}"/>
+					<input type="hidden"
+						class="form-control" name="totalSize" id="totalSize"
+						 th:value="${hpcSearch.getTotalSize()}"/>		
 				</form>
             </div>
           </div>
@@ -523,6 +529,7 @@
 									var waitEle = document
 											.getElementById("wait");
 									waitEle.style.display = "block";
+									$("#submit").prop('disabled', true);
 									$.ajax({
 										type : "POST",
 										url : "/download",
@@ -534,12 +541,14 @@
 												$('#message').html(msg.message);
 												ele.style.display = "block";
 												ele.classList.remove("alert-danger");
+												$("#submit").prop('disabled', false);
 											} else {
 												waitEle.style.display = "none";
 												console.log('FAILURE: ', msg);
 												$('#message').html(msg.message);
 												ele.style.display = "block";
 												ele.classList.add("alert-danger");
+												$("#submit").prop('disabled', false);
 											}
 										},
 										error : function(e) {
@@ -548,6 +557,7 @@
 											$('#message').html(e.message);
 											ele.style.display = "block";
 											ele.classList.add("alert-danger");
+											$("#submit").prop('disabled', false);
 										}
 									});
 								} else {

@@ -14,6 +14,8 @@ import java.util.Base64;
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import javax.crypto.spec.SecretKeySpec;
 
@@ -73,10 +75,13 @@ public class HpcS3Connection {
 	// The multipart upload threshold.
 	@Value("${hpc.integration.s3.multipartUploadThreshold}")
 	private Long multipartUploadThreshold = null;
-	
-	// The socket timeout
+
+	// The socket timeout.
 	@Value("${hpc.integration.s3.socketTimeout}")
 	private Integer socketTimeout = null;
+
+	// The executor service to be used by AWSTransferManager
+	private ExecutorService executorService = null;
 
 	// ---------------------------------------------------------------------//
 	// Constructors
@@ -85,14 +90,20 @@ public class HpcS3Connection {
 	/**
 	 * Constructor for Spring Dependency Injection.
 	 * 
-	 * @param pathStyleAccessEnabledProviders A list of S3 3rd party providers that
-	 *                                        require connection w/ path-style
-	 *                                        enabled.
+	 * @param pathStyleAccessEnabledProviders  A list of S3 3rd party providers that
+	 *                                         require connection w/ path-style
+	 *                                         enabled.
+	 * @param awsTransferManagerThreadPoolSize The thread pool size to be used for
+	 *                                         AWS transfer manager
 	 */
-	private HpcS3Connection(String pathStyleAccessEnabledProviders) {
+	private HpcS3Connection(String pathStyleAccessEnabledProviders, int awsTransferManagerThreadPoolSize) {
 		for (String s3Provider : pathStyleAccessEnabledProviders.split(",")) {
 			this.pathStyleAccessEnabledProviders.add(HpcIntegratedSystem.fromValue(s3Provider));
 		}
+
+		// Instantiate the executor service for AWS transfer manager.
+		executorService = Executors.newFixedThreadPool(awsTransferManagerThreadPoolSize,
+				Executors.defaultThreadFactory());
 	}
 
 	// ---------------------------------------------------------------------//
@@ -203,6 +214,7 @@ public class HpcS3Connection {
 	 * @return TransferManager
 	 * @throws HpcException if authentication failed
 	 */
+	@SuppressWarnings("deprecation")
 	private Object authenticateS3Provider(String username, String password, String url, boolean pathStyleAccessEnabled,
 			HpcIntegratedSystem s3Provider, String encryptionAlgorithm, String encryptionKey) throws HpcException {
 		// Create the credential provider based on the configured credentials.
@@ -213,8 +225,8 @@ public class HpcS3Connection {
 		EndpointConfiguration endpointConfiguration = new EndpointConfiguration(url, null);
 
 		// Instantiate a S3 client.
-		ClientConfiguration config = new ClientConfiguration(); 
-		config.setSocketTimeout(socketTimeout); 
+		ClientConfiguration config = new ClientConfiguration();
+		config.setSocketTimeout(socketTimeout);
 		AmazonS3 s3Client = null;
 		if (!StringUtils.isEmpty(encryptionAlgorithm) && !StringUtils.isEmpty(encryptionKey)) {
 			s3Client = AmazonS3EncryptionClientV2Builder.standard().withCryptoConfiguration(new CryptoConfigurationV2()
@@ -222,8 +234,7 @@ public class HpcS3Connection {
 					.withEncryptionMaterialsProvider(new StaticEncryptionMaterialsProvider(new EncryptionMaterials(
 							new SecretKeySpec(Base64.getDecoder().decode(encryptionKey), encryptionAlgorithm))))
 					.withCredentials(s3ArchiveCredentialsProvider).withPathStyleAccessEnabled(pathStyleAccessEnabled)
-					.withEndpointConfiguration(endpointConfiguration)
-					.withClientConfiguration(config).build();
+					.withEndpointConfiguration(endpointConfiguration).withClientConfiguration(config).build();
 		} else {
 			s3Client = AmazonS3ClientBuilder.standard().withCredentials(s3ArchiveCredentialsProvider)
 					.withPathStyleAccessEnabled(pathStyleAccessEnabled).withEndpointConfiguration(endpointConfiguration)
@@ -235,10 +246,11 @@ public class HpcS3Connection {
 		// so we override the configured threshold w/ the max size of 5GB.
 		HpcS3TransferManager s3TransferManager = new HpcS3TransferManager();
 		s3TransferManager.transferManager = TransferManagerBuilder.standard().withS3Client(s3Client)
-				.withMinimumUploadPartSize(minimumUploadPartSize)
+				.withAlwaysCalculateMultipartMd5(true).withMinimumUploadPartSize(minimumUploadPartSize)
 				.withMultipartUploadThreshold(
 						url.equalsIgnoreCase(GOOGLE_STORAGE_URL) ? FIVE_GB : multipartUploadThreshold)
-				.withDisableParallelDownloads(true).build();
+				.withDisableParallelDownloads(true).withExecutorFactory(() -> executorService)
+				.withShutDownThreadPools(false).build();
 		s3TransferManager.s3Provider = s3Provider;
 		return s3TransferManager;
 	}
@@ -254,6 +266,7 @@ public class HpcS3Connection {
 	 * @return TransferManager
 	 * @throws HpcException if authentication failed
 	 */
+	@SuppressWarnings("deprecation")
 	private Object authenticateAWS(String accessKey, String secretKey, String region, String encryptionAlgorithm,
 			String encryptionKey) throws HpcException {
 		try {
@@ -278,7 +291,8 @@ public class HpcS3Connection {
 
 			// Create and return the S3 transfer manager.
 			HpcS3TransferManager s3TransferManager = new HpcS3TransferManager();
-			s3TransferManager.transferManager = TransferManagerBuilder.standard().withS3Client(s3Client).build();
+			s3TransferManager.transferManager = TransferManagerBuilder.standard().withS3Client(s3Client)
+					.withDisableParallelDownloads(true).withExecutorFactory(() -> executorService).withShutDownThreadPools(false).build();
 			s3TransferManager.s3Provider = HpcIntegratedSystem.AWS;
 			return s3TransferManager;
 

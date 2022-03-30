@@ -15,7 +15,6 @@ import java.util.List;
 import java.util.UUID;
 
 import gov.nih.nci.hpc.domain.datamanagement.HpcPathAttributes;
-import gov.nih.nci.hpc.domain.datatransfer.HpcAccessTokenType;
 import gov.nih.nci.hpc.domain.datatransfer.HpcArchive;
 import gov.nih.nci.hpc.domain.datatransfer.HpcArchiveObjectMetadata;
 import gov.nih.nci.hpc.domain.datatransfer.HpcArchiveType;
@@ -24,6 +23,7 @@ import gov.nih.nci.hpc.domain.datatransfer.HpcDataTransferDownloadReport;
 import gov.nih.nci.hpc.domain.datatransfer.HpcDataTransferUploadReport;
 import gov.nih.nci.hpc.domain.datatransfer.HpcDirectoryScanItem;
 import gov.nih.nci.hpc.domain.datatransfer.HpcFileLocation;
+import gov.nih.nci.hpc.domain.datatransfer.HpcGlobusTransferRequest;
 import gov.nih.nci.hpc.domain.datatransfer.HpcS3Account;
 import gov.nih.nci.hpc.domain.datatransfer.HpcUploadPartETag;
 import gov.nih.nci.hpc.domain.error.HpcErrorType;
@@ -75,12 +75,11 @@ public interface HpcDataTransferProxy {
 	 * Authenticate a Google Drive / Google Cloud Storage account.
 	 *
 	 * @param accessToken      Google Drive / Storage access token.
-	 * @param accessTokenToken Access token type (user account / system account).
 	 * @return An authenticated token, to be used in subsequent calls to data
 	 *         transfer.
 	 * @throws HpcException on data transfer system failure.
 	 */
-	public default Object authenticate(String accessToken, HpcAccessTokenType accessTokenType) throws HpcException {
+	public default Object authenticate(String accessToken) throws HpcException {
 		throw new HpcException("authenticate(Google access-token) not supported", HpcErrorType.UNEXPECTED_ERROR);
 	}
 
@@ -406,4 +405,17 @@ public interface HpcDataTransferProxy {
 		throw new HpcException("existsTieringPolicy() not supported", HpcErrorType.UNEXPECTED_ERROR);
 	}
 
+	/**
+	 * Submit a data transfer request to Globus.
+	 *
+	 * @param authenticatedToken An authenticated token.
+	 * @param transferRequest    The Globus transfer request
+	 * @param encryptedTransfer  (Optional) encrypted transfer indicator
+	 * @return The data transfer request ID.
+	 * @throws HpcException on data transfer system failure.
+	 */
+	public default String transferData(Object authenticatedToken, HpcGlobusTransferRequest transferRequest,
+			Boolean encryptedTransfer) throws HpcException {
+		throw new HpcException("transferData() not supported", HpcErrorType.UNEXPECTED_ERROR);
+	}
 }

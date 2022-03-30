@@ -16,6 +16,7 @@ import gov.nih.nci.hpc.domain.model.HpcAuthenticationTokenClaims;
 import gov.nih.nci.hpc.domain.model.HpcDistinguishedNameSearch;
 import gov.nih.nci.hpc.domain.model.HpcDistinguishedNameSearchResult;
 import gov.nih.nci.hpc.domain.model.HpcGroup;
+import gov.nih.nci.hpc.domain.model.HpcQueryConfiguration;
 import gov.nih.nci.hpc.domain.model.HpcRequestInvoker;
 import gov.nih.nci.hpc.domain.model.HpcUser;
 import gov.nih.nci.hpc.domain.user.HpcAuthenticationType;
@@ -183,6 +184,7 @@ public interface HpcSecurityService {
 	 * @param ldapAuthentication    (Optional) If true - authenticate the system
 	 *                              account via LDAP.
 	 * @param systemAccountFunction The function to perform as system account.
+	 * @param <T>                   The class of the system account function
 	 * @return T The functional interface return type
 	 * @throws HpcException thrown by the function.
 	 */
@@ -234,17 +236,14 @@ public interface HpcSecurityService {
 	public void addSystemAccount(HpcIntegratedSystemAccount account, HpcDataTransferType dataTransferType,
 			String classifier) throws HpcException;
 
-	
 	/**
 	 * Get a singular system account.
 	 *
-	 * @param account          The system account to be retrieved.
-	 * 
+	 * @param system The system for which its account to be retrieved.
 	 * @throws HpcException on service failure.
 	 */
-	public HpcIntegratedSystemAccount getSystemAccount(HpcIntegratedSystem system) 
-			throws HpcException;
-	
+	public HpcIntegratedSystemAccount getSystemAccount(HpcIntegratedSystem system) throws HpcException;
+
 	/**
 	 * Create an authentication token, so the caller can use it in subsequent calls.
 	 *
@@ -311,12 +310,29 @@ public interface HpcSecurityService {
 			throws HpcException;
 
 	/**
-     * Check if user is a data curator
-     * 
-     * @param nciUserId The user ID
-     * @return true if user is data curator
-     * @throws HpcException on service failure.
-     */
-    public boolean isUserDataCurator(String nciUserId) throws HpcException;
+	 * Check if user is a data curator
+	 * 
+	 * @param nciUserId The user ID
+	 * @return true if user is data curator
+	 * @throws HpcException on service failure.
+	 */
+	public boolean isUserDataCurator(String nciUserId) throws HpcException;
 
+	/**
+	 * Update Query Configuration
+	 * 
+	 * @param basePath      The basePath
+	 * @param encryptionKey The encryption key
+	 * @throws HpcException on service failure.
+	 */
+	public void updateQueryConfig(String basePath, String encryptionKey) throws HpcException;
+
+	/**
+	 * Get Query Configuration
+	 * 
+	 * @param basePath The basePath
+	 * @return the HpcQueryConfiguration.
+	 * @throws HpcException on service failure.
+	 */
+	public HpcQueryConfiguration getQueryConfig(String basePath) throws HpcException;
 }

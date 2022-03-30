@@ -9,6 +9,8 @@
 
 package gov.nih.nci.hpc.dao.oracle.impl;
 
+import static gov.nih.nci.hpc.util.HpcUtil.humanReadableByteCount;
+
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Date;
@@ -17,8 +19,6 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -275,10 +275,8 @@ public class HpcReportsDAOImpl implements HpcReportsDAO {
 	@Autowired
 	private JdbcTemplate jdbcTemplate = null;
 
-	// The logger instance.
-	private final Logger logger = LoggerFactory.getLogger(this.getClass().getName());
-
 	private String iRodsBasePath = "";
+
 	// ---------------------------------------------------------------------//
 	// Constructors
 	// ---------------------------------------------------------------------//
@@ -358,21 +356,18 @@ public class HpcReportsDAOImpl implements HpcReportsDAO {
 		String[] returnVal = new String[] { "0", "0", "0" };
 		if (totals != null) {
 			Iterator<Object> values = totals.values().iterator();
-			Double totalSize = 0d;
-			Double maxSize = 0d;
-			Double avgSize = 0d;
 			Object value1 = values.next();
 			Object value2 = values.next();
 			Object value3 = values.next();
 			if (value1 != null)
-				totalSize = new Double(value1.toString());
-			returnVal[0] = humanReadableByteCount(totalSize, true);
+				returnVal[0] = criteria.getIsMachineReadable() ? value1.toString()
+						: humanReadableByteCount(new Double(value1.toString()), true);
 			if (value2 != null)
-				maxSize = new Double(value2.toString());
-			returnVal[1] = humanReadableByteCount(maxSize, true);
+				returnVal[1] = criteria.getIsMachineReadable() ? value2.toString()
+						: humanReadableByteCount(new Double(value2.toString()), true);
 			if (value3 != null)
-				avgSize = new Double(value3.toString());
-			returnVal[2] = humanReadableByteCount(avgSize, true);
+				returnVal[2] = criteria.getIsMachineReadable() ? value3.toString()
+						: humanReadableByteCount(new Double(value3.toString()), true);
 
 		}
 		return returnVal;
@@ -740,89 +735,94 @@ public class HpcReportsDAOImpl implements HpcReportsDAO {
 		if (criteria.getPath() != null)
 			report.setPath(criteria.getPath());
 
-		long start = System.currentTimeMillis();
+		String[] totals = new String[2];
+		boolean allAttributes = criteria.getAttributes() == null || criteria.getAttributes().isEmpty();
 
 		// TOTAL_NUM_OF_REGISTERED_USERS
-		HpcReportEntry userSizeEntry = new HpcReportEntry();
-		userSizeEntry.setAttribute(HpcReportEntryAttribute.TOTAL_NUM_OF_REGISTERED_USERS);
-		userSizeEntry.setValue(getUsersSize(criteria, dateArgs, docArg, docDateUsersArgs, basepathArg, basepathDateArgs,
-				pathArg, pathDateLongArgs));
-		long stop = System.currentTimeMillis();
-		logger.error(": " + (stop - start));
-		start = System.currentTimeMillis();
-
-		// Total Size - TOTAL_DATA_SIZE
-		HpcReportEntry sizeEntry = new HpcReportEntry();
-		sizeEntry.setAttribute(HpcReportEntryAttribute.TOTAL_DATA_SIZE);
-		String[] totals = getTotalDataSize(criteria, dateLongArgs, docArg, docDateArgs, userArg, userDateArgs,
-				basepathArg, basepathDateLongArgs, pathArg, pathDateLongArgs);
-		sizeEntry.setValue(totals[0]);
-		stop = System.currentTimeMillis();
-		logger.error("TOTAL_DATA_SIZE " + (stop - start));
-		start = System.currentTimeMillis();
-
-		// Largest file - LARGEST_FILE_SIZE
-		HpcReportEntry largestFileSizeEntry = new HpcReportEntry();
-		largestFileSizeEntry.setAttribute(HpcReportEntryAttribute.LARGEST_FILE_SIZE);
-		largestFileSizeEntry.setValue(totals[1]);
-		stop = System.currentTimeMillis();
-		logger.error("LARGEST_FILE_SIZE " + (stop - start));
-		start = System.currentTimeMillis();
-
-		// Average file - AVERAGE_FILE_SIZE
-		HpcReportEntry averageFileSizeEntry = new HpcReportEntry();
-		averageFileSizeEntry.setAttribute(HpcReportEntryAttribute.AVERAGE_FILE_SIZE);
-		averageFileSizeEntry.setValue(totals[2]);
-		stop = System.currentTimeMillis();
-		logger.error("AVERAGE_FILE_SIZE " + (stop - start));
-		start = System.currentTimeMillis();
-
-		// Total number of data objects - TOTAL_NUM_OF_DATA_OBJECTS
-		HpcReportEntry numOfDataObjEntry = new HpcReportEntry();
-		numOfDataObjEntry.setAttribute(HpcReportEntryAttribute.TOTAL_NUM_OF_DATA_OBJECTS);
-		numOfDataObjEntry.setValue(getTotalDataObjSize(criteria, dateLongArgs, docArg, docDateArgs, userArg,
-				userDateArgs, basepathArg, basepathDateLongArgs, pathArg, pathDateLongArgs));
-		stop = System.currentTimeMillis();
-		logger.error("TOTAL_NUM_OF_DATA_OBJECTS " + (stop - start));
-		start = System.currentTimeMillis();
-
-		// Total number of collections - TOTAL_NUM_OF_COLLECTIONS
-		List<Map<String, Object>> list = getTotalCollectionsSize(criteria, dateLongArgs, docArg, docDateArgs, userArg,
-				userDateArgs, basepathArg, basepathDateLongArgs, pathArg, pathDateLongArgs);
-		StringBuffer str = new StringBuffer();
-		str.append("[");
-		if (list != null) {
-			for (Map<String, Object> listEntry : list) {
-				String type = null;
-				String count = null;
-				Iterator<String> iter = listEntry.keySet().iterator();
-				while (iter.hasNext()) {
-					String name = iter.next();
-					if (name.equalsIgnoreCase("cnt")) {
-						java.math.BigDecimal value = (java.math.BigDecimal) listEntry.get(name);
-						count = value.toString();
-					} else
-						type = (String) listEntry.get(name);
-				}
-				str.append("{" + type + ": " + count + "}");
+		if (allAttributes || criteria.getAttributes().contains(HpcReportEntryAttribute.TOTAL_NUM_OF_REGISTERED_USERS)) {
+			if (!(criteria.getType().equals(HpcReportType.USAGE_SUMMARY_BY_USER)
+					|| criteria.getType().equals(HpcReportType.USAGE_SUMMARY_BY_USER_BY_DATE_RANGE))) {
+				HpcReportEntry userSizeEntry = new HpcReportEntry();
+				userSizeEntry.setAttribute(HpcReportEntryAttribute.TOTAL_NUM_OF_REGISTERED_USERS);
+				userSizeEntry.setValue(getUsersSize(criteria, dateArgs, docArg, docDateUsersArgs, basepathArg,
+						basepathDateArgs, pathArg, pathDateLongArgs));
+				report.getReportEntries().add(userSizeEntry);
 			}
 		}
-		str.append("]");
-		HpcReportEntry numOfCollEntry = new HpcReportEntry();
-		numOfCollEntry.setAttribute(HpcReportEntryAttribute.TOTAL_NUM_OF_COLLECTIONS);
-		numOfCollEntry.setValue(str.toString());
-		stop = System.currentTimeMillis();
-		logger.error("TOTAL_NUM_OF_COLLECTIONS " + (stop - start));
-		start = System.currentTimeMillis();
+
+		// Total Size - TOTAL_DATA_SIZE
+		if (allAttributes || criteria.getAttributes().contains(HpcReportEntryAttribute.TOTAL_DATA_SIZE)) {
+			HpcReportEntry sizeEntry = new HpcReportEntry();
+			sizeEntry.setAttribute(HpcReportEntryAttribute.TOTAL_DATA_SIZE);
+			totals = getTotalDataSize(criteria, dateLongArgs, docArg, docDateArgs, userArg, userDateArgs, basepathArg,
+					basepathDateLongArgs, pathArg, pathDateLongArgs);
+			sizeEntry.setValue(totals[0]);
+			report.getReportEntries().add(sizeEntry);
+		}
+
+		// Largest file - LARGEST_FILE_SIZE
+		if (allAttributes || criteria.getAttributes().contains(HpcReportEntryAttribute.LARGEST_FILE_SIZE)) {
+			HpcReportEntry largestFileSizeEntry = new HpcReportEntry();
+			largestFileSizeEntry.setAttribute(HpcReportEntryAttribute.LARGEST_FILE_SIZE);
+			largestFileSizeEntry.setValue(totals[1]);
+			report.getReportEntries().add(largestFileSizeEntry);
+		}
+
+		// Average file - AVERAGE_FILE_SIZE
+		if (allAttributes || criteria.getAttributes().contains(HpcReportEntryAttribute.AVERAGE_FILE_SIZE)) {
+			HpcReportEntry averageFileSizeEntry = new HpcReportEntry();
+			averageFileSizeEntry.setAttribute(HpcReportEntryAttribute.AVERAGE_FILE_SIZE);
+			averageFileSizeEntry.setValue(totals[2]);
+			report.getReportEntries().add(averageFileSizeEntry);
+		}
+
+		// Total number of data objects - TOTAL_NUM_OF_DATA_OBJECTS
+		if (allAttributes || criteria.getAttributes().contains(HpcReportEntryAttribute.TOTAL_NUM_OF_DATA_OBJECTS)) {
+			HpcReportEntry numOfDataObjEntry = new HpcReportEntry();
+			numOfDataObjEntry.setAttribute(HpcReportEntryAttribute.TOTAL_NUM_OF_DATA_OBJECTS);
+			numOfDataObjEntry.setValue(getTotalDataObjSize(criteria, dateLongArgs, docArg, docDateArgs, userArg,
+					userDateArgs, basepathArg, basepathDateLongArgs, pathArg, pathDateLongArgs));
+			report.getReportEntries().add(numOfDataObjEntry);
+		}
+
+		// Total number of collections - TOTAL_NUM_OF_COLLECTIONS
+		if (allAttributes || criteria.getAttributes().contains(HpcReportEntryAttribute.TOTAL_NUM_OF_COLLECTIONS)) {
+			List<Map<String, Object>> list = getTotalCollectionsSize(criteria, dateLongArgs, docArg, docDateArgs,
+					userArg, userDateArgs, basepathArg, basepathDateLongArgs, pathArg, pathDateLongArgs);
+			StringBuffer str = new StringBuffer();
+			str.append("[");
+			if (list != null) {
+				for (Map<String, Object> listEntry : list) {
+					String type = null;
+					String count = null;
+					Iterator<String> iter = listEntry.keySet().iterator();
+					while (iter.hasNext()) {
+						String name = iter.next();
+						if (name.equalsIgnoreCase("cnt")) {
+							java.math.BigDecimal value = (java.math.BigDecimal) listEntry.get(name);
+							count = value.toString();
+						} else
+							type = (String) listEntry.get(name);
+					}
+					str.append("{" + type + ": " + count + "}");
+				}
+			}
+			str.append("]");
+			HpcReportEntry numOfCollEntry = new HpcReportEntry();
+			numOfCollEntry.setAttribute(HpcReportEntryAttribute.TOTAL_NUM_OF_COLLECTIONS);
+			numOfCollEntry.setValue(str.toString());
+			report.getReportEntries().add(numOfCollEntry);
+		}
 
 		// Total Meta attributes Size - TOTAL_NUMBER_OF_META_ATTRS
-		HpcReportEntry metasizeEntry = new HpcReportEntry();
-		metasizeEntry.setAttribute(HpcReportEntryAttribute.AVG_NUMBER_OF_DATA_OBJECT_META_ATTRS);
-		metasizeEntry.setValue(getTotalMetaAttrCount(criteria, dateLongArgs, docArg, docDateArgs, userArg, userDateArgs,
-				basepathArg, basepathDateLongArgs, pathArg, pathDateLongArgs));
-		stop = System.currentTimeMillis();
-		logger.error("TOTAL_NUMBER_OF_META_ATTRS " + (stop - start));
-		start = System.currentTimeMillis();
+		if (allAttributes
+				|| criteria.getAttributes().contains(HpcReportEntryAttribute.AVG_NUMBER_OF_DATA_OBJECT_META_ATTRS)) {
+			HpcReportEntry metasizeEntry = new HpcReportEntry();
+			metasizeEntry.setAttribute(HpcReportEntryAttribute.AVG_NUMBER_OF_DATA_OBJECT_META_ATTRS);
+			metasizeEntry.setValue(getTotalMetaAttrCount(criteria, dateLongArgs, docArg, docDateArgs, userArg,
+					userDateArgs, basepathArg, basepathDateLongArgs, pathArg, pathDateLongArgs));
+			report.getReportEntries().add(metasizeEntry);
+		}
 
 		// File size ranges
 		Object[] filesizedateArgs = new Object[2];
@@ -849,41 +849,51 @@ public class HpcReportsDAOImpl implements HpcReportsDAO {
 		filesizeuserDateArgs[1] = fromDateLong;
 		filesizeuserDateArgs[2] = toDateLong;
 
-		// Get File size ranges
-		List<Map<String, Object>> fileSizeRanges = getFileSizeRange(criteria, filesizedateArgs, filesizedocArgs,
-				filesizedocDateArgs, filesizeuserArgs, filesizeuserDateArgs, basepathArg, basepathDateLongArgs, pathArg,
-				pathDateLongArgs);
-		HpcReportEntry oneMBEntry = new HpcReportEntry();
-		oneMBEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_BELOW_1_MB);
-		oneMBEntry.setValue(getFilesSize("range1", fileSizeRanges));
+		if (allAttributes || criteria.getAttributes().contains(HpcReportEntryAttribute.FILE_SIZES)) {
+			// Get File size ranges
+			List<Map<String, Object>> fileSizeRanges = getFileSizeRange(criteria, filesizedateArgs, filesizedocArgs,
+					filesizedocDateArgs, filesizeuserArgs, filesizeuserDateArgs, basepathArg, basepathDateLongArgs,
+					pathArg, pathDateLongArgs);
+			HpcReportEntry oneMBEntry = new HpcReportEntry();
+			oneMBEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_BELOW_1_MB);
+			oneMBEntry.setValue(getFilesSize("range1", fileSizeRanges));
+			report.getReportEntries().add(oneMBEntry);
 
-		HpcReportEntry tenMBEntry = new HpcReportEntry();
-		tenMBEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_1_MB_10_MB);
-		tenMBEntry.setValue(getFilesSize("range2", fileSizeRanges));
+			HpcReportEntry tenMBEntry = new HpcReportEntry();
+			tenMBEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_1_MB_10_MB);
+			tenMBEntry.setValue(getFilesSize("range2", fileSizeRanges));
+			report.getReportEntries().add(tenMBEntry);
 
-		HpcReportEntry fiftyMBEntry = new HpcReportEntry();
-		fiftyMBEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_10_MB_50_MB);
-		fiftyMBEntry.setValue(getFilesSize("range3", fileSizeRanges));
+			HpcReportEntry fiftyMBEntry = new HpcReportEntry();
+			fiftyMBEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_10_MB_50_MB);
+			fiftyMBEntry.setValue(getFilesSize("range3", fileSizeRanges));
+			report.getReportEntries().add(fiftyMBEntry);
 
-		HpcReportEntry hundredMBEntry = new HpcReportEntry();
-		hundredMBEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_50_MB_100_MB);
-		hundredMBEntry.setValue(getFilesSize("range4", fileSizeRanges));
+			HpcReportEntry hundredMBEntry = new HpcReportEntry();
+			hundredMBEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_50_MB_100_MB);
+			hundredMBEntry.setValue(getFilesSize("range4", fileSizeRanges));
+			report.getReportEntries().add(hundredMBEntry);
 
-		HpcReportEntry fivehundredMBEntry = new HpcReportEntry();
-		fivehundredMBEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_100_MB_500_MB);
-		fivehundredMBEntry.setValue(getFilesSize("range5", fileSizeRanges));
+			HpcReportEntry fivehundredMBEntry = new HpcReportEntry();
+			fivehundredMBEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_100_MB_500_MB);
+			fivehundredMBEntry.setValue(getFilesSize("range5", fileSizeRanges));
+			report.getReportEntries().add(fivehundredMBEntry);
 
-		HpcReportEntry onegbEntry = new HpcReportEntry();
-		onegbEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_500_MB_1_GB);
-		onegbEntry.setValue(getFilesSize("range6", fileSizeRanges));
+			HpcReportEntry onegbEntry = new HpcReportEntry();
+			onegbEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_500_MB_1_GB);
+			onegbEntry.setValue(getFilesSize("range6", fileSizeRanges));
+			report.getReportEntries().add(onegbEntry);
 
-		HpcReportEntry tengbEntry = new HpcReportEntry();
-		tengbEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_1_GB_10_GB);
-		tengbEntry.setValue(getFilesSize("range7", fileSizeRanges));
+			HpcReportEntry tengbEntry = new HpcReportEntry();
+			tengbEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_1_GB_10_GB);
+			tengbEntry.setValue(getFilesSize("range7", fileSizeRanges));
+			report.getReportEntries().add(tengbEntry);
 
-		HpcReportEntry overtengbEntry = new HpcReportEntry();
-		overtengbEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_OVER_10_GB);
-		overtengbEntry.setValue(getFilesSize("range8", fileSizeRanges));
+			HpcReportEntry overtengbEntry = new HpcReportEntry();
+			overtengbEntry.setAttribute(HpcReportEntryAttribute.FILE_SIZE_OVER_10_GB);
+			overtengbEntry.setValue(getFilesSize("range8", fileSizeRanges));
+			report.getReportEntries().add(overtengbEntry);
+		}
 
 		report.setGeneratedOn(Calendar.getInstance());
 		if (criteria.getDocs() != null && criteria.getDocs().size() > 0)
@@ -896,24 +906,6 @@ public class HpcReportsDAOImpl implements HpcReportsDAO {
 		if (criteria.getToDate() != null)
 			report.setToDate(criteria.getToDate());
 
-		if (!(criteria.getType().equals(HpcReportType.USAGE_SUMMARY_BY_USER)
-				|| criteria.getType().equals(HpcReportType.USAGE_SUMMARY_BY_USER_BY_DATE_RANGE)))
-			report.getReportEntries().add(userSizeEntry);
-		report.getReportEntries().add(sizeEntry);
-		report.getReportEntries().add(largestFileSizeEntry);
-		report.getReportEntries().add(averageFileSizeEntry);
-		report.getReportEntries().add(numOfDataObjEntry);
-		report.getReportEntries().add(numOfCollEntry);
-		report.getReportEntries().add(metasizeEntry);
-		report.getReportEntries().add(oneMBEntry);
-		report.getReportEntries().add(tenMBEntry);
-		report.getReportEntries().add(fiftyMBEntry);
-		report.getReportEntries().add(hundredMBEntry);
-		report.getReportEntries().add(fivehundredMBEntry);
-		report.getReportEntries().add(onegbEntry);
-		report.getReportEntries().add(tengbEntry);
-		report.getReportEntries().add(overtengbEntry);
-
 		return report;
 	}
 
@@ -925,24 +917,6 @@ public class HpcReportsDAOImpl implements HpcReportsDAO {
 			}
 		}
 		return "0";
-	}
-
-	private static final String[] SI_UNITS = { "B", "KB", "MB", "GB", "TB", "PB", "EB" };
-	private static final String[] BINARY_UNITS = { "B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB" };
-
-	public static String humanReadableByteCount(final double bytes, final boolean useSIUnits) {
-		final String[] units = useSIUnits ? SI_UNITS : BINARY_UNITS;
-		final int base = useSIUnits ? 1000 : 1024;
-
-		// When using the smallest unit no decimal point is needed, because it's
-		// the exact number.
-		if (bytes < base) {
-			return bytes + " " + units[0];
-		}
-
-		final int exponent = (int) (Math.log(bytes) / Math.log(base));
-		final String unit = units[exponent];
-		return String.format("%.1f %s", bytes / Math.pow(base, exponent), unit);
 	}
 
 	@Override

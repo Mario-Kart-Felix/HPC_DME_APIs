@@ -15,10 +15,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.commons.lang3.StringUtils;
 import org.json.simple.JSONArray;
 import org.json.simple.JSONObject;
 import org.json.simple.parser.JSONParser;
-import org.springframework.util.StringUtils;
 
 import gov.nih.nci.hpc.domain.error.HpcErrorType;
 import gov.nih.nci.hpc.domain.notification.HpcEventPayloadEntry;
@@ -46,7 +46,7 @@ public class HpcNotificationFormatter {
 	// ---------------------------------------------------------------------//
 
 	// A map of notification formats.
-	private Map<HpcEventType, HpcNotificationFormat> notificationFormats = new HashMap<>();
+	private Map<String, HpcNotificationFormat> notificationFormats = new HashMap<>();
 
 	private Map<HpcSystemAdminNotificationType, HpcNotificationFormat> systemAdminNotificationFormats = new HashMap<>();
 
@@ -86,15 +86,15 @@ public class HpcNotificationFormatter {
 	 *
 	 * @param eventType      The event type to generate the text for.
 	 * @param payloadEntries The payload entries to use for the format arguments.
+	 * @param doc            The doc specific template to be used for this user.
+	 *                       (Optional)
 	 * @return A notification text message.
 	 * @throws HpcException on service failure.
 	 */
-	public String formatText(HpcEventType eventType, List<HpcEventPayloadEntry> payloadEntries) throws HpcException {
+	public String formatText(HpcEventType eventType, String doc, List<HpcEventPayloadEntry> payloadEntries)
+			throws HpcException {
 		// Find the format for the event type
-		HpcNotificationFormat format = notificationFormats.get(eventType);
-		if (format == null) {
-			throw new HpcException("Notification format not found for: " + eventType, HpcErrorType.UNEXPECTED_ERROR);
-		}
+		HpcNotificationFormat format = getFormat(eventType, doc, payloadEntries);
 
 		// Add environment specific URL
 		HpcEventPayloadEntry payloadEntry = new HpcEventPayloadEntry();
@@ -130,18 +130,34 @@ public class HpcNotificationFormatter {
 	 * Generate a notification subject for an event.
 	 *
 	 * @param eventType      The event type to generate the subject for.
+	 * @param doc            The doc specific template to be used for this user.
+	 *                       (Optional)
 	 * @param payloadEntries The payload entries to use for the format arguments.
 	 * @return A notification text message.
 	 * @throws HpcException on service failure.
 	 */
-	public String formatSubject(HpcEventType eventType, List<HpcEventPayloadEntry> payloadEntries) throws HpcException {
+	public String formatSubject(HpcEventType eventType, String doc, List<HpcEventPayloadEntry> payloadEntries)
+			throws HpcException {
 		// Find the format for the event type
-		HpcNotificationFormat format = notificationFormats.get(eventType);
-		if (format == null) {
-			throw new HpcException("Notification format not found for: " + eventType, HpcErrorType.UNEXPECTED_ERROR);
-		}
-
+		HpcNotificationFormat format = getFormat(eventType, doc, payloadEntries);
 		return format(format.getSubjectFormat(), format.getSubjectArguments(), payloadEntries);
+	}
+
+	/**
+	 * Generate a notification from display for an event.
+	 *
+	 * @param eventType      The event type to generate the from display for.
+	 * @param doc            The doc specific template to be used for this event.
+	 *                       (Optional)
+	 * @param payloadEntries The payload entries to use for the format arguments.
+	 * @return A notification text message.
+	 * @throws HpcException on service failure.
+	 */
+	public String formatFromDisplay(HpcEventType eventType, String doc, List<HpcEventPayloadEntry> payloadEntries)
+			throws HpcException {
+		// Find the format for the event type
+		HpcNotificationFormat format = getFormat(eventType, doc, payloadEntries);
+		return format.getFromDisplayFormat();
 	}
 
 	/**
@@ -270,6 +286,7 @@ public class HpcNotificationFormatter {
 		notificationFormat.setSubjectFormat((String) jsonNotificationFormat.get("subjectFormat"));
 		notificationFormat.getSubjectArguments().addAll(
 				notificationFormatArgumentsFromJSON((JSONArray) jsonNotificationFormat.get("subjectArguments")));
+		notificationFormat.setFromDisplayFormat((String) jsonNotificationFormat.get("fromDisplayFormat"));
 		notificationFormat.setTextFormat((String) jsonNotificationFormat.get("textFormat"));
 		notificationFormat.getTextArguments()
 				.addAll(notificationFormatArgumentsFromJSON((JSONArray) jsonNotificationFormat.get("textArguments")));
@@ -309,6 +326,7 @@ public class HpcNotificationFormatter {
 
 			// Extract the event type.
 			String eventTypeStr = (String) jsonNotificationFormat.get("eventType");
+			String doc = (String) jsonNotificationFormat.get("doc");
 			String systemAdminNotificationTypeStr = (String) jsonNotificationFormat.get("systemAdminNotificationType");
 			if (StringUtils.isEmpty(eventTypeStr) && StringUtils.isEmpty(systemAdminNotificationTypeStr)) {
 				throw new HpcException("Invalid event type / system admin notification type: " + jsonNotificationFormat,
@@ -318,7 +336,10 @@ public class HpcNotificationFormatter {
 			HpcNotificationFormat notificationFormat = notificationFormatFromJSON(jsonNotificationFormat);
 			if (eventTypeStr != null) {
 				// Populate the map <eventType -> notificationFormat>
-				notificationFormats.put(HpcEventType.valueOf(eventTypeStr), notificationFormat);
+				if (StringUtils.isEmpty(doc))
+					notificationFormats.put(eventTypeStr, notificationFormat);
+				else
+					notificationFormats.put(eventTypeStr + "_" + doc, notificationFormat);
 			} else {
 				// Populate the map <systemAdminNotificationType -> notificationFormat>
 				systemAdminNotificationFormats.put(
@@ -346,5 +367,45 @@ public class HpcNotificationFormatter {
 		}
 
 		return DEFAULT_PAYLOAD_ENTRY_VALUE;
+	}
+
+	/**
+	 * Get format template
+	 *
+	 * @param eventType      The event type to obtain the format for.
+	 * @param doc            The doc specific template to be used for this user.
+	 *                       (Optional)
+	 * @param payloadEntries The payload entries to use for looking up specific
+	 *                       template.
+	 * @return The format template
+	 * @throws HpcException If failed to find the format.
+	 */
+	private HpcNotificationFormat getFormat(HpcEventType eventType, String doc,
+			List<HpcEventPayloadEntry> payloadEntries) throws HpcException {
+		HpcNotificationFormat format = null;
+		// For collection updates, try to find update specific templates
+		if (eventType.equals(HpcEventType.COLLECTION_UPDATED)) {
+			HpcEventPayloadEntry updateEntry = payloadEntries.stream()
+					.filter(entry -> "UPDATE".equals(entry.getAttribute())).findAny().orElse(null);
+			// Try to find doc specific template first
+			if (doc != null)
+				format = notificationFormats.get(eventType.toString() + "_" + updateEntry.getValue() + "_" + doc);
+			if (format != null)
+				return format;
+			// Try to find template without doc
+			format = notificationFormats.get(eventType.toString() + "_" + updateEntry.getValue());
+			if (format != null)
+				return format;
+		}
+		// Find the doc specific format for the event type
+		if (doc != null)
+			format = notificationFormats.get(eventType.toString() + "_" + doc);
+		if (format != null)
+			return format;
+		// Find the format for the event type
+		format = notificationFormats.get(eventType.toString());
+		if (format == null)
+			throw new HpcException("Notification format not found for: " + eventType, HpcErrorType.UNEXPECTED_ERROR);
+		return format;
 	}
 }

@@ -46,6 +46,10 @@ import gov.nih.nci.hpc.domain.databrowse.HpcBookmark;
 import gov.nih.nci.hpc.domain.datamanagement.HpcPermission;
 import gov.nih.nci.hpc.domain.metadata.HpcMetadataEntry;
 import gov.nih.nci.hpc.domain.metadata.HpcMetadataValidationRule;
+import gov.nih.nci.hpc.domain.report.HpcReport;
+import gov.nih.nci.hpc.domain.report.HpcReportEntry;
+import gov.nih.nci.hpc.domain.report.HpcReportEntryAttribute;
+import gov.nih.nci.hpc.domain.report.HpcReportType;
 import gov.nih.nci.hpc.dto.datamanagement.HpcCollectionDTO;
 import gov.nih.nci.hpc.dto.datamanagement.HpcCollectionListDTO;
 import gov.nih.nci.hpc.dto.datamanagement.HpcCollectionRegistrationDTO;
@@ -63,6 +67,7 @@ import gov.nih.nci.hpc.web.model.HpcMetadataAttrEntry;
 import gov.nih.nci.hpc.web.model.HpcSecuredRequest;
 import gov.nih.nci.hpc.web.model.Views;
 import gov.nih.nci.hpc.web.util.HpcClientUtil;
+
 
 /**
  * <p>
@@ -115,6 +120,8 @@ public class HpcCollectionController extends HpcCreateCollectionDataFileControll
 			@RequestParam String action, Model model, BindingResult bindingResult, HttpSession session,
 			HttpServletRequest request, RedirectAttributes redirAttrs) {
 		try {
+			// Prepend forward slash if user doesn't enter
+			path = path.charAt(0) != '/' ? '/' + path : path;
 			// User Session validation
 			HpcUserDTO user = (HpcUserDTO) session.getAttribute("hpcUser");			
 			String authToken = (String) session.getAttribute(ATTR_USER_TOKEN);
@@ -185,6 +192,21 @@ public class HpcCollectionController extends HpcCreateCollectionDataFileControll
 				boolean canDeleteFlag = determineIfCollectionCanBeDelete(session, collection);
 				model.addAttribute(ATTR_CAN_DELETE, Boolean.toString(canDeleteFlag));
 				
+				//Get the collection size if present
+				List<HpcReport> reports = collection.getReports();
+				if(!CollectionUtils.isEmpty(reports)) {
+					for(HpcReport report: reports) {
+						if(report.getType().equals(HpcReportType.USAGE_SUMMARY_BY_PATH)) {
+							for(HpcReportEntry reportEntry: report.getReportEntries()) {
+								if(reportEntry.getAttribute().equals(HpcReportEntryAttribute.TOTAL_DATA_SIZE)) {
+									model.addAttribute("collectionSize", MiscUtil.addHumanReadableSize(reportEntry.getValue(), true));
+									break;
+								}
+							}
+						}
+					}
+				}
+
 				if (action != null && action.equals("edit")) {
 					if (collection.getPermission() == null || collection.getPermission().equals(HpcPermission.NONE)
 							|| collection.getPermission().equals(HpcPermission.READ)) {

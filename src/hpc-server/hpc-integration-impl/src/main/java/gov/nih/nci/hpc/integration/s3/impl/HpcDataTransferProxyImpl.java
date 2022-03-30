@@ -117,9 +117,9 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 	@Autowired
 	private HpcS3Connection s3Connection = null;
 
-	// The S3 download executor.
+	// The S3 executor.
 	@Autowired
-	@Qualifier("hpcS3DownloadExecutor")
+	@Qualifier("hpcS3Executor")
 	Executor s3Executor = null;
 
 	// Date formatter to format files last-modified date
@@ -205,6 +205,10 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 	public String downloadDataObject(Object authenticatedToken, HpcDataObjectDownloadRequest downloadRequest,
 			HpcArchive baseArchiveDestination, HpcDataTransferProgressListener progressListener,
 			Boolean encryptedTransfer) throws HpcException {
+		if(downloadRequest.getArchiveLocation() == null) {
+			throw new HpcException("Null archive location", HpcErrorType.UNEXPECTED_ERROR);
+		}
+		
 		if (downloadRequest.getFileDestination() != null) {
 			// This is a download request to a local file.
 			return downloadDataObject(authenticatedToken, downloadRequest.getArchiveLocation(),
@@ -467,6 +471,7 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 		return objectMetadata;
 	}
 
+	@SuppressWarnings("deprecation")
 	@Override
 	public synchronized void setTieringPolicy(Object authenticatedToken, HpcFileLocation archiveLocation, String prefix,
 			String tieringBucket, String tieringProtocol) throws HpcException {
@@ -638,16 +643,16 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 		Calendar dataTransferCompleted = null;
 		try {
 			s3Upload = s3Connection.getTransferManager(authenticatedToken).upload(request);
-			if (progressListener == null) {
-				// Upload synchronously.
-				s3Upload.waitForUploadResult();
-				dataTransferCompleted = Calendar.getInstance();
-			} else {
+			if (progressListener != null) {
 				// Upload asynchronously.
 				s3Upload.addProgressListener(new HpcS3ProgressListener(progressListener,
-						"upload to" + archiveDestinationLocation.getFileContainerId() + ":"
+						"upload staged file [" + sourceFile.getAbsolutePath() + "] to "
+								+ archiveDestinationLocation.getFileContainerId() + ":"
 								+ archiveDestinationLocation.getFileId()));
 			}
+			// Upload synchronously.
+			s3Upload.waitForUploadResult();
+			dataTransferCompleted = Calendar.getInstance();
 
 		} catch (AmazonClientException ace) {
 			throw new HpcException("[S3] Failed to upload file.", HpcErrorType.DATA_TRANSFER_ERROR,
@@ -704,7 +709,8 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 			HpcArchive baseArchiveDestination, Long size, HpcDataTransferProgressListener progressListener,
 			List<HpcMetadataEntry> metadataEntries, String storageClass) throws HpcException {
 		if (progressListener == null) {
-			throw new HpcException("[S3] No progress listener provided for a upload from AWS S3 destination",
+			throw new HpcException(
+					"[S3] No progress listener provided for a upload from AWS S3 / S3 Provider / Google Drive / Google Cloud Storage",
 					HpcErrorType.UNEXPECTED_ERROR);
 		}
 		if (size == null) {
@@ -966,9 +972,11 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 	private String downloadDataObject(Object authenticatedToken, HpcFileLocation archiveLocation,
 			File destinationLocation, HpcDataTransferProgressListener progressListener) throws HpcException {
 		// Create a S3 download request.
+		
 		GetObjectRequest request = new GetObjectRequest(archiveLocation.getFileContainerId(),
 				archiveLocation.getFileId());
 
+		
 		// Download the file via S3.
 		Download s3Download = null;
 		try {
@@ -988,6 +996,8 @@ public class HpcDataTransferProxyImpl implements HpcDataTransferProxy {
 
 		} catch (InterruptedException ie) {
 			Thread.currentThread().interrupt();
+			
+		} catch(Exception ge) {
 		}
 
 		return String.valueOf(s3Download.hashCode());

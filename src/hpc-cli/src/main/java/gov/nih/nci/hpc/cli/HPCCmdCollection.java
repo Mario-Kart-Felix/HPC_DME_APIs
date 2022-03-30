@@ -36,6 +36,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.util.UriComponentsBuilder;
 
+import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import com.fasterxml.jackson.core.JsonParseException;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationFeature;
@@ -121,7 +122,7 @@ public class HPCCmdCollection extends HPCCmdClient {
         .build().encode().toUri();
       String serviceURL = uri2Apply.toURL().toExternalForm();
 			if (cmd == null || cmd.isEmpty() || criteria == null || criteria.isEmpty()) {
-				System.out.println("Invlaid Command");
+				System.out.println("Invalid Command");
 				return Constants.CLI_2;
 			}
 
@@ -133,9 +134,10 @@ public class HPCCmdCollection extends HPCCmdClient {
 				Response restResponse = null;
 				
 				if (cmd.equals("deleteCollection")) {
-					Iterator iterator = criteria.keySet().iterator();
-					String path = (String) iterator.next();
-					restResponse =  processDeleteCmd(serviceURL, path, outputFile, detail, userId, password, authToken);
+					String path = criteria.get("path");
+					String recursive = criteria.get("recursive");
+					String force = criteria.get("force");
+					restResponse =  processDeleteCmd(serviceURL, path, recursive, force, userId, password, authToken);
 					if(restResponse == null) {
 						return null;
 					}
@@ -244,8 +246,8 @@ public class HPCCmdCollection extends HPCCmdClient {
 				}
 				else if(restResponse.getStatus() != 204)
 				{
-			        ObjectMapper mapper = new ObjectMapper();
-			        AnnotationIntrospectorPair intr = new AnnotationIntrospectorPair(
+				ObjectMapper mapper = new ObjectMapper();
+				AnnotationIntrospectorPair intr = new AnnotationIntrospectorPair(
 			            new JaxbAnnotationIntrospector(TypeFactory.defaultInstance()),
 			            new JacksonAnnotationIntrospector());
 			        mapper.setAnnotationIntrospector(intr);
@@ -353,11 +355,12 @@ public class HPCCmdCollection extends HPCCmdClient {
 	}
 	
 	
-	private Response processDeleteCmd(String serviceURL, String path, String outputFile, 
-			String recursive, String userId, String password, String authToken) throws
+	private Response processDeleteCmd(String serviceURL, String path, String recursive,
+			String force, String userId, String password, String authToken) throws
 		JsonParseException, IOException {
 		
 		recursive = recursive != null ? recursive : "false";
+		force = force != null ? force : "false";
 		jline.console.ConsoleReader reader;
 		reader = new jline.console.ConsoleReader();
 		reader.setExpandEvents(false);
@@ -365,7 +368,11 @@ public class HPCCmdCollection extends HPCCmdClient {
 		//Obtain confirmation from the user - multiple levels of confirmation for recursive delete
 		if(recursive.equalsIgnoreCase("true")) {
 			
-			System.out.println("WARNING: You have requested recursive delete of the collection. This will delete all files and sub-collections within it recursively. Are you sure you want to proceed? (Y/N):");
+			if(force.equalsIgnoreCase("true")) {
+				System.out.println("WARNING: You have requested recursive, hard delete of the collection. This will permanently delete all files and sub-collections within it recursively. Are you sure you want to proceed? (Y/N):");
+			} else {
+				System.out.println("WARNING: You have requested recursive delete of the collection. This will delete all files and sub-collections within it recursively. Are you sure you want to proceed? (Y/N):");
+			}
 			confirm = reader.readLine();
 			if (confirm == null || !"Y".equalsIgnoreCase(confirm)) {
 				System.out.println("Skipped deleting collections");
@@ -393,10 +400,10 @@ public class HPCCmdCollection extends HPCCmdClient {
 		}			
 		
 		//Invoke delete API if user confirms
-//		serviceURL = serviceURL + path + "/?recursive=" + recursive;
 		serviceURL = UriComponentsBuilder.fromHttpUrl(serviceURL)
       .path("/{dme-archive-path}")
-      .queryParam("recursive", Boolean.valueOf(recursive).toString())
+      .queryParam("recursive", recursive)
+      .queryParam("force", force)
       .buildAndExpand(path)
       .encode().toUri().toURL().toExternalForm();
 		WebClient client = HpcClientUtil.getWebClient(serviceURL, hpcServerProxyURL, hpcServerProxyPort, hpcCertPath, hpcCertPassword);
@@ -414,12 +421,21 @@ public class HPCCmdCollection extends HPCCmdClient {
 	  String servicePath = UriComponentsBuilder.fromHttpUrl(serviceURL).path(
       "/{dme-archive-path}/children").buildAndExpand(path).encode().toUri()
       .toURL().toExternalForm();
- 		WebClient client = HpcClientUtil.getWebClient(servicePath, hpcServerProxyURL, hpcServerProxyPort, hpcCertPath, hpcCertPassword);
-		client.header("Authorization", "Bearer " + authToken);
-		// if necessary, add client.type("application/json; charset=UTF-8");
+	  	WebClient client = HpcClientUtil.getWebClient(servicePath, hpcServerProxyURL, hpcServerProxyPort, hpcCertPath, hpcCertPassword);
+	  	client.header("Authorization", "Bearer " + authToken);
+	  	// if necessary, add client.type("application/json; charset=UTF-8");
 		Response restResponse = client.get();
-		MappingJsonFactory factory = new MappingJsonFactory();
 		
+		ObjectMapper mapper = new ObjectMapper();
+        AnnotationIntrospectorPair intr = new AnnotationIntrospectorPair(
+            new JaxbAnnotationIntrospector(TypeFactory.defaultInstance()),
+            new JacksonAnnotationIntrospector());
+        mapper.setAnnotationIntrospector(intr);
+        mapper.setSerializationInclusion(Include.NON_NULL);
+        mapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
+        MappingJsonFactory factory = new MappingJsonFactory(mapper);
+	
 		if (restResponse.getStatus() == 200) {
 			JsonParser parser = factory.createParser((InputStream) restResponse.getEntity());
 			HpcCollectionListDTO collections = parser.readValueAs(HpcCollectionListDTO.class);

@@ -143,7 +143,7 @@
 					"index": "1"
 				}
 			],
-			"textFormat": "Your download request is completed.<br/>Source path: %1$s<br/>Target path: %2$s <br/>Task ID: %3$s<br/><br/>You are receiving this email because you subscribed to this notification from DME. <br/><a href=\"%4$s/subscribe\">Unsubscribe</a>",
+			"textFormat": "Your download request is completed.<br/>Source path: %1$s<br/>Target path: %2$s <br/>Task ID: <a href=\"%4$s/downloadtask?taskId=%3$s&type=%5$s\">%3$s</a><br/><br/>You are receiving this email because you subscribed to this notification from DME. <br/><a href=\"%4$s/subscribe\">Unsubscribe</a>",
 			"textArguments": [
 				{
 					"payloadEntryAttribute": "DATA_OBJECT_PATH",
@@ -160,6 +160,10 @@
 				{
 					"payloadEntryAttribute": "BASE_UI_URL",
 					"index": "3"
+				},
+				{
+					"payloadEntryAttribute": "DOWNLOAD_TASK_TYPE_CODE",
+					"index": "4"
 				}
 			]
 		},
@@ -176,7 +180,7 @@
 					"index": "1"
 				}
 			],
-			"textFormat": "Your download request failed.<br/>Source path: %1$s<br/>Target path: %2$s <br/>Task ID: %3$s<br/>Reason for failure: %4$s<br/><br/>You are receiving this email because you subscribed to this notification from DME. <br/><a href=\"%5$s/subscribe\">Unsubscribe</a>",
+			"textFormat": "Your download request failed.<br/>Source path: %1$s<br/>Target path: %2$s <br/>Task ID: <a href=\"%5$s/downloadtask?taskId=%3$s&type=%6$s\">%3$s</a><br/>Reason for failure: %4$s<br/><br/>You are receiving this email because you subscribed to this notification from DME. <br/><a href=\"%5$s/subscribe\">Unsubscribe</a>",
 			"textArguments": [
 				{
 					"payloadEntryAttribute": "DATA_OBJECT_PATH",
@@ -197,6 +201,10 @@
 				{
 					"payloadEntryAttribute": "BASE_UI_URL",
 					"index": "4"
+				},
+				{
+					"payloadEntryAttribute": "DOWNLOAD_TASK_TYPE_CODE",
+					"index": "5"
 				}
 			]
 		},
@@ -424,6 +432,57 @@
 					"payloadEntryAttribute": "BASE_UI_URL",
 					"index": "2"
 				}
+			]
+		},
+		{
+			"eventType": "COLLECTION_UPDATED_DATA_OBJECT_REGISTRATION",
+			"doc": "GAU",
+			"fromDisplayFormat": "DME Notification on behalf of Genome Analysis Unit",
+			"subjectFormat": "Data from Genome Analysis Unit is now available for %1$s",
+			"subjectArguments": [
+				{
+					"payloadEntryAttribute": "COLLECTION_PATH",
+					"index": "0"
+				}
+			],
+			"textFormat": "Dear %6$s %7$s,<br/><br/>The sequencing run you requested from the Genome Analysis Unit has been completed, and the data has been uploaded for long-term storage on your behalf to the NCI Data Vault at %8$s.  The download size is %5$s bytes. <br/>For questions regarding this dataset, contact <a href=\"mailto:fitzgepe@mail.nih.gov\">Peter Fitzgerald</a> <br/><br/>You do not need to take any additional steps to back up this data or transfer it to another drive for storage. Please note that:<br/><ul><li>Master copies stored on your behalf in the NCI Data Vault are intended for long-term retention.</li><li>No one can overwrite or delete these master copies without your approval.</li><li>Any copies you download may be regarded as temporary. You can delete them when they are no longer in active use or when space on your storage drive becomes limiting.</li><li>For questions about accessing the NCI Data Vault, contact <a href=\"mailto:ncidatavault@mail.nih.gov\">ncidatavault@mail.nih.gov</a></li><li>For storage policies and procedures, refer to <a href=\"https://service.cancer.gov/ncisp?id=nci_kb_article&sysparm_article=NCI-KB0014467\">Best Practices for Management of HVSD</a>.</li></ul>When you are ready to begin working with your data, you can access them in the following ways:<br/><ul><li>You can download a copy at any time through the Data Management Environment (DME):<ol><li>Navigate to the master copy of this dataset:<br/><a href=\"%3$s/datafile?action=view&path=%1$s\">%8$s</a></li><li>In the icon bar, click the download icon.</li></ol></li><li>You can use the following link to download a copy from your browser for the next two weeks:<br/><a href=\"%4$s\">%8$s</a></li><li>You can download from the command line using wget for the next two weeks by copying the following command to a terminal window:<br/>wget -O %9$s \"%4$s\"</li><li>At any time, you can analyze your data using the genomics analysis tools hosted in NIDAP by logging into your <a href=\"https://nidap.nih.gov/multipass/login/all\">NIDAP Account</a> and navigating to your Data Catalog [insert link]</li></ul>",
+			"textArguments": [
+				{
+					"payloadEntryAttribute": "DATA_OBJECT_PATH",
+					"index": "0"
+				},
+				{
+					"payloadEntryAttribute": "UPDATE_DESCRIPTION",
+					"index": "1"
+				},
+				{
+					"payloadEntryAttribute": "BASE_UI_URL",
+					"index": "2"
+				},
+				{
+					"payloadEntryAttribute": "PRESIGNED_URL",
+					"index": "3"
+				},
+				{
+					"payloadEntryAttribute": "DATA_OBJECT_SIZE",
+					"index": "4"
+				},
+				{
+					"payloadEntryAttribute": "FIRST_NAME",
+					"index": "5"
+				},
+				{
+					"payloadEntryAttribute": "LAST_NAME",
+					"index": "6"
+				},
+				{
+					"payloadEntryAttribute": "COLLECTION_PATH",
+					"index": "7"
+				},
+				{
+					"payloadEntryAttribute": "DATA_OBJECT_NAME",
+					"index": "8"
+				},
 			]
 		},
 		{
